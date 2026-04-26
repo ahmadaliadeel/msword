@@ -1,120 +1,134 @@
-"""Block base class, BlockRegistry, and ParagraphSpec.
+"""Block base class, registry, and the paragraph-iteration protocol.
 
-# stub: replaced by unit-5
+Per spec §4.2: blocks are the structural unit inside a story; runs (inline)
+live inside paragraph-bearing blocks. Each concrete block type registers
+itself in :class:`BlockRegistry` so unknown payloads from disk can be
+resolved to the right class without import-time coupling at the call site.
 
-Unit-5 (`model-blocks-schema`) owns the canonical `Block` ABC, `BlockRegistry`,
-schema-version handling, and the paragraph-iter protocol. Unit-7 only needs the
-shape of those interfaces so its block types (image, table) can register at
-import and round-trip through the registry. Field names and method signatures
-here are chosen to match what unit-5 will land, so the unit-5 file simply
-replaces this stub without forcing changes in unit-7.
+This module deliberately ships a *stub* :class:`Run` and :class:`ParagraphSpec`
+shape. They are replaced by unit-4 (`model-story-and-runs`) once that lands.
 """
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from collections.abc import Iterator
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar
+import abc
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Any, ClassVar, NamedTuple
 
-if TYPE_CHECKING:
-    from msword.model.run import Run
-
-
-@dataclass(frozen=True)
-class ParagraphSpec:
-    """One paragraph of shaped text — what the §5 layout composer consumes."""
-
-    runs: tuple[Run, ...]
-    paragraph_style_ref: str | None = None
-    attrs: dict[str, Any] = field(default_factory=dict)
+BLOCKS_SCHEMA_VERSION: int = 1
 
 
-class Block(ABC):
-    """Abstract base for every block type in a story."""
-
-    kind: ClassVar[str] = ""
-
-    @abstractmethod
-    def iter_paragraphs(self) -> Iterator[ParagraphSpec]:
-        """Yield the paragraphs this block contributes to the layout pipeline."""
-
-    @abstractmethod
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to a JSON-safe dict. Must include ``"kind": cls.kind``."""
-
-    @classmethod
-    @abstractmethod
-    def from_dict(cls, data: dict[str, Any]) -> Block:
-        """Deserialize from a dict produced by :meth:`to_dict`."""
+class UnknownBlockKindError(KeyError):
+    """Raised when :class:`BlockRegistry` cannot resolve a block ``kind``."""
 
 
-class BlockRegistry:
-    """Central registry of block types, keyed by ``kind``."""
-
-    _types: ClassVar[dict[str, type[Block]]] = {}
-
-    @classmethod
-    def register(cls, block_cls: type[Block]) -> type[Block]:
-        kind = block_cls.kind
-        if not kind:
-            raise ValueError(f"{block_cls.__name__} must set a non-empty `kind`")
-        existing = cls._types.get(kind)
-        if existing is not None and existing is not block_cls:
-            raise ValueError(f"Block kind {kind!r} already registered to {existing.__name__}")
-        cls._types[kind] = block_cls
-        return block_cls
-
-    @classmethod
-    def get(cls, kind: str) -> type[Block]:
-        try:
-            return cls._types[kind]
-        except KeyError as e:
-            raise KeyError(f"No block registered for kind {kind!r}") from e
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> Block:
-        return cls.get(data["kind"]).from_dict(data)
+# Run is the canonical type from unit-4; alias here for callers that historically
+# imported it from `msword.model.block`.
+from msword.model.run import Run as Run  # noqa: E402
 
 
-@dataclass
-class ParagraphBlock(Block):
-    """Stub paragraph block used by unit-7 tests for nested-block roundtrips.
+# stub: replaced by unit-4
+@dataclass(slots=True)
+class StubRun:
+    """Concrete minimal :class:`Run` used until unit-4 lands."""
 
-    # stub: replaced by unit-5
+    text: str = ""
+    bold: bool = False
+    italic: bool = False
+
+
+# Bridges to the real Run (unit-4 has landed).
+from msword.model.run import Run as _RealRun  # noqa: E402
+
+
+def run_to_dict(run: Run) -> dict[str, Any]:
+    """Serialize any :class:`Run`-shaped object via its full inline-mark surface."""
+    if isinstance(run, _RealRun):
+        return run.to_dict()
+    # Fallback for non-Run shapes (test stubs etc.) — minimal surface only.
+    return {"text": run.text, "bold": run.bold, "italic": run.italic}
+
+
+def run_from_dict(d: dict[str, Any]) -> _RealRun:
+    """Deserialize into a real :class:`Run` (unit-4)."""
+    return _RealRun.from_dict(d)
+
+
+# stub: replaced by unit-4
+class ParagraphSpec(NamedTuple):
+    """One paragraph emitted by ``Story.iter_paragraphs`` for the composer.
+
+    Stub shape — unit-4 owns the canonical definition.
     """
 
-    kind: ClassVar[str] = "paragraph"
+    runs: tuple[Run, ...]
+    paragraph_style_ref: str | None
+    block_id: str
 
+
+class Block(abc.ABC):
+    """Abstract base for every block type stored in a story.
+
+    Concrete subclasses MUST:
+
+    * declare a unique ``kind`` class-var,
+    * register themselves with :func:`BlockRegistry.register`,
+    * implement :meth:`to_dict` (including ``"kind"`` and ``"id"``),
+    * implement :meth:`iter_paragraphs` (yields zero or more
+      :class:`ParagraphSpec`, depending on whether the block carries text),
+    * implement :meth:`_from_dict_specific` for reconstruction.
+    """
+
+    kind: ClassVar[str]
     id: str
-    runs: list[Run] = field(default_factory=list)
-    paragraph_style_ref: str | None = None
 
-    def iter_paragraphs(self) -> Iterator[ParagraphSpec]:
-        yield ParagraphSpec(
-            runs=tuple(self.runs),
-            paragraph_style_ref=self.paragraph_style_ref,
-        )
-
+    @abc.abstractmethod
     def to_dict(self) -> dict[str, Any]:
-        out: dict[str, Any] = {
-            "kind": self.kind,
-            "id": self.id,
-            "runs": [r.to_dict() for r in self.runs],
-        }
-        if self.paragraph_style_ref is not None:
-            out["paragraph_style_ref"] = self.paragraph_style_ref
-        return out
+        """Serialize to a JSON-safe dict; MUST include ``kind`` and ``id``."""
+
+    @abc.abstractmethod
+    def iter_paragraphs(self) -> Iterable[ParagraphSpec]:
+        """Yield the paragraphs this block contributes to the layout pipeline."""
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> ParagraphBlock:
-        from msword.model.run import Run as _Run
+    def from_dict(cls, d: dict[str, Any]) -> Block:
+        """Reconstruct any block from its serialized form via the registry."""
+        return BlockRegistry.resolve(d)
 
-        return cls(
-            id=data["id"],
-            runs=[_Run.from_dict(r) for r in data.get("runs", [])],
-            paragraph_style_ref=data.get("paragraph_style_ref"),
-        )
+    @classmethod
+    @abc.abstractmethod
+    def _from_dict_specific(cls, d: dict[str, Any]) -> Block:
+        """Type-specific reconstruction; called by the registry after lookup."""
 
 
-BlockRegistry.register(ParagraphBlock)
+class _Registry:
+    """Module-level (singleton-ish) mapping of ``kind`` to block class."""
+
+    def __init__(self) -> None:
+        self._kinds: dict[str, type[Block]] = {}
+
+    def register(self, cls: type[Block]) -> type[Block]:
+        """Decorator: register ``cls`` under its ``kind`` and return it."""
+        kind = cls.kind
+        existing = self._kinds.get(kind)
+        if existing is not None and existing is not cls:
+            raise ValueError(
+                f"Block kind {kind!r} already registered to {existing.__name__}"
+            )
+        self._kinds[kind] = cls
+        return cls
+
+    def resolve(self, d: dict[str, Any]) -> Block:
+        """Look up the class for ``d['kind']`` and reconstruct via it."""
+        kind = d.get("kind")
+        cls = self._kinds.get(kind) if isinstance(kind, str) else None
+        if cls is None:
+            raise UnknownBlockKindError(kind)
+        return cls._from_dict_specific(d)
+
+    def kinds(self) -> list[str]:
+        return sorted(self._kinds)
+
+
+BlockRegistry = _Registry()

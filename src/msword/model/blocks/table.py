@@ -70,7 +70,7 @@ class BlockCell:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> BlockCell:
         return cls(
-            blocks=[BlockRegistry.from_dict(b) for b in data.get("blocks", [])],
+            blocks=[BlockRegistry.resolve(b) for b in data.get("blocks", [])],
             rowspan=int(data.get("rowspan", 1)),
             colspan=int(data.get("colspan", 1)),
             vertical_align=data.get("vertical_align", "top"),
@@ -111,7 +111,7 @@ class TableBlock(Block):
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> TableBlock:
+    def _from_dict_specific(cls, data: dict[str, Any]) -> TableBlock:
         cells: dict[tuple[int, int], BlockCell] = {}
         for entry in data.get("cells", []):
             row = int(entry["row"])

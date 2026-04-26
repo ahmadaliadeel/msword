@@ -6,29 +6,26 @@ unit-5 stub), ``iter_paragraphs`` row-major walk, and BlockRegistry registration
 
 from __future__ import annotations
 
-from msword.model.block import (
-    Block,
-    BlockRegistry,
-    ParagraphBlock,
-    ParagraphSpec,
-)
+from msword.model.block import Block, BlockRegistry, ParagraphSpec
 from msword.model.blocks import (
     BlockCell,
     BlockCol,
     BlockRow,
     ImageBlock,
+    ParagraphBlock,
     TableBlock,
 )
 from msword.model.run import Run
 
 
 def _roundtrip(block: Block) -> Block:
-    return BlockRegistry.from_dict(block.to_dict())
+    return BlockRegistry.resolve(block.to_dict())
 
 
 def test_block_kinds_registered() -> None:
+    registered = set(BlockRegistry.kinds())
     for kind in ("image", "table-block"):
-        BlockRegistry.get(kind)
+        assert kind in registered
 
 
 # ---------- ImageBlock ----------

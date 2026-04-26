@@ -48,7 +48,7 @@ class ImageBlock(Block):
         return out
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> ImageBlock:
+    def _from_dict_specific(cls, data: dict[str, Any]) -> ImageBlock:
         return cls(
             id=data["id"],
             asset_ref=data["asset_ref"],
