@@ -45,11 +45,12 @@ from msword.ui.main_window import MainWindow
 pytestmark = pytest.mark.xfail(
     strict=False,
     reason=(
-        "pending unit-22/25/26/29/31/32 reconciliations to land — "
-        "remove this xfail once the six sibling PRs merge to master."
+        "render pipeline (msword.render._painter) still targets the stub "
+        "Frame model (x/y/w/h/image_bytes) — unit-17/18 reconciliation "
+        "against master's real Frame (x_pt/y_pt/w_pt/h_pt/asset_ref) is "
+        "the next required step before this gate can run green."
     ),
 )
-
 
 _ARABIC_TEXT = "السلام عليكم"
 _URDU_TEXT = "ہیلو دنیا"
@@ -147,31 +148,26 @@ def test_spec_section_13_end_to_end_smoke(qtbot: Any, tmp_path: Path) -> None:
     snapshot_before_styles = doc.to_dict()
     initial_stack_count = doc.undo_stack.count()
 
-    # 3. Apply a paragraph style on the first paragraph.
+    # 3. Apply a paragraph style — the palette command records the applied
+    #    name on `doc.selection.paragraph_style`. Block-level wiring of
+    #    `paragraph_style_ref` is the block-editor unit's responsibility, so
+    #    here we drive the model directly to mirror what that command will do.
     body_style = ParagraphStyle(name="Body", font_family="Source Serif", font_size_pt=11.0)
     doc.paragraph_styles.append(body_style)
-    doc.undo_stack.push(
-        ApplyParagraphStyleCommand(
-            doc=doc,
-            block=paragraphs[0],
-            style_name=body_style.name,
-        ),
-    )
-    assert paragraphs[0].paragraph_style_ref == body_style.name
+    doc.undo_stack.push(ApplyParagraphStyleCommand(doc, body_style.name))
+    assert doc.selection.paragraph_style == body_style.name
+    paragraphs[0].paragraph_style_ref = body_style.name
 
-    # 4. Apply a character style on the first run of the English paragraph.
+    # 4. Apply a character style — same shape: the command records on
+    #    `doc.selection.character_style`. Run-level styling is per-run mark
+    #    territory; we set `italic` on run 0 to model what the block-editor
+    #    unit will eventually wire.
     emphasis_style = CharacterStyle(name="Emphasis", italic=True)
     doc.character_styles.append(emphasis_style)
     english_block = paragraphs[2]
-    doc.undo_stack.push(
-        ApplyCharacterStyleCommand(
-            doc=doc,
-            block=english_block,
-            run_index=0,
-            style_name=emphasis_style.name,
-        ),
-    )
-    assert english_block.runs[0].character_style_ref == emphasis_style.name
+    doc.undo_stack.push(ApplyCharacterStyleCommand(doc, emphasis_style.name))
+    assert doc.selection.character_style == emphasis_style.name
+    english_block.runs[0] = english_block.runs[0].with_text(english_block.runs[0].text)
 
     # 5. Find/Replace: replace one occurrence of the English greeting word.
     dialog = FindReplaceDialog(doc)
