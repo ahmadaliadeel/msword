@@ -1,15 +1,15 @@
-"""Local stub of ParagraphSpec — the unit yielded by ``Block.iter_paragraphs``.
+"""Layout-side paragraph extension for footnotes — unit-32 (`feat-footnotes`).
 
-Owned by unit-13 (`layout-text-composer`). The footnote unit extends the
-spec with an *optional* list of inline reference marks at character
-offsets, per §4.2 / §5 of the design doc:
+Per §4.2 / §5 of the design doc: "ParagraphSpec extension carries optional
+ref-marks list at char offsets." Master's canonical
+:class:`msword.model.story.ParagraphSpec` is the unit yielded by
+``Block.iter_paragraphs`` and does not carry footnote references — those are
+a layout-only concern. The footnote unit needs an inline marker that the
+main composer can consult when shaping a page; this module owns those types.
 
-    "ParagraphSpec extension carries optional ref-marks list at char
-     offsets."
-
-When unit-13 lands the full spec, the ``ref_marks`` field must be carried
-through — it is the seam by which the main composer queues footnote bodies
-into the per-page footnote area.
+When the full ``FrameComposer`` (unit-13) lands its real ParagraphSpec with
+the inline-mark surface, the ``ref_marks`` field can move there and this
+module becomes a re-export shim.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from msword.model.run import Run
 class FootnoteRefMark:
     """Inline mark indicating "a footnote reference sits here".
 
-    Carried on the ParagraphSpec rather than inside a Run, so the layout
+    Carried on the per-page paragraph rather than inside a Run, so the layout
     pipeline can find every reference without walking marks per glyph.
 
     Attributes:
@@ -37,12 +37,12 @@ class FootnoteRefMark:
 
 
 @dataclass(frozen=True, slots=True)
-class ParagraphSpec:
-    """One paragraph queued for the frame composer.
+class FootnotedParagraphSpec:
+    """One paragraph queued for the footnote-aware page composer.
 
-    Stub: only carries the fields the footnote unit needs. The full spec
-    (paragraph_style_ref, direction overrides, baseline-grid flag, …)
-    arrives with unit-13.
+    A layout-only extension of master's :class:`ParagraphSpec`: same run
+    sequence, plus the inline footnote references the main composer must
+    surface to the per-page footnote area.
     """
 
     runs: tuple[Run, ...] = ()

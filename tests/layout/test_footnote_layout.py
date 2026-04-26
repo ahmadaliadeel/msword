@@ -20,59 +20,30 @@ broader layout suite.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from dataclasses import dataclass, field
 from typing import Any
-
-import pytest
 
 from msword.layout.footnote import (
     LINE_HEIGHT,
     compose_page_with_footnotes,
 )
-from msword.layout.paragraph_spec import FootnoteRefMark, ParagraphSpec
-from msword.model.block import Block
+from msword.layout.paragraph_spec import FootnotedParagraphSpec, FootnoteRefMark
 from msword.model.blocks.footnote import FootnoteBlock
+from msword.model.blocks.paragraph import ParagraphBlock
 from msword.model.run import Run
-
-pytestmark = pytest.mark.xfail(
-    reason=(
-        "unit-32 footnote layout tests build documents from a stub Block API "
-        "(direct concrete construction, dict-keyed body) that diverges from "
-        "master's unit-5 abstract-Block registry. Reconciliation tracked "
-        "outside this merge."
-    ),
-    strict=False,
-)
-
-# ---- local paragraph-block stub (mirrors the unit-test stub) ----
-
-
-@dataclass(slots=True)
-class _StubParagraph(Block):
-    kind = "test.paragraph"
-
-    runs: list[Run] = field(default_factory=list)
-
-    def iter_paragraphs(self) -> Iterator[ParagraphSpec]:
-        yield ParagraphSpec(runs=tuple(self.runs))
-
-    def to_json(self) -> dict[str, Any]:
-        return {"kind": self.kind}
 
 
 def _make_footnote(fn_id: str, body_text: str) -> FootnoteBlock:
     return FootnoteBlock(
         id=fn_id,
-        body_blocks=[_StubParagraph(runs=[Run(text=body_text)])],
+        body_blocks=[ParagraphBlock(id=f"{fn_id}-p", runs=[Run(text=body_text)])],
     )
 
 
-def _para(text: str, *refs: FootnoteRefMark) -> ParagraphSpec:
-    return ParagraphSpec(runs=(Run(text=text),), ref_marks=refs)
+def _para(text: str, *refs: FootnoteRefMark) -> FootnotedParagraphSpec:
+    return FootnotedParagraphSpec(runs=(Run(text=text),), ref_marks=refs)
 
 
-def test_two_refs_both_fit_in_footnote_area(qtbot) -> None:  # type: ignore[no-untyped-def]
+def test_two_refs_both_fit_in_footnote_area(qtbot: Any) -> None:
     """Both refs land on page 1; area shows entries "1" then "2"."""
     del qtbot  # presence is the contract; we don't need a widget here.
 
@@ -103,7 +74,7 @@ def test_two_refs_both_fit_in_footnote_area(qtbot) -> None:  # type: ignore[no-u
     assert result.overflow_footnotes == []
 
 
-def test_second_footnote_pushed_to_page_two_when_area_overflows(qtbot) -> None:  # type: ignore[no-untyped-def]
+def test_second_footnote_pushed_to_page_two_when_area_overflows(qtbot: Any) -> None:
     """When the footnote area only has room for one entry, footnote 2
     ripples to page 2 and the main flow on page 1 ends at paragraph 1
     (the paragraph that referenced the overflowing footnote)."""
@@ -146,7 +117,7 @@ def test_second_footnote_pushed_to_page_two_when_area_overflows(qtbot) -> None: 
 
 
 def test_overflowed_footnote_lays_on_next_page_with_remaining_main_flow(
-    qtbot,  # type: ignore[no-untyped-def]
+    qtbot: Any,
 ) -> None:
     """End-to-end across two pages: feed page-1 overflow into page-2 and
     verify footnote "2" appears in page-2's area without renumbering."""
