@@ -7,26 +7,21 @@ import unicodedata
 import pytest
 
 from msword.feat.find_engine import find_all, replace_all
-from msword.model.block import Block
+from msword.model.blocks import CalloutBlock, ParagraphBlock
 from msword.model.document import Document
 from msword.model.run import Run
 from msword.model.story import Story
 
-pytestmark = pytest.mark.xfail(
-    reason=(
-        "unit-31 find-engine targets stub Document/Block/Story/Run constructors "
-        "(`Document(stories=...)`, `Block(kind=..., runs=...)`, etc.) and a "
-        "`MacroCommand(text=...)` shape that diverge from master's unit-2/5/4/9 "
-        "model + commands. Reconciliation tracked outside this merge."
-    ),
-    strict=False,
-)
-
 
 def _doc_with_paragraphs(*paragraphs: str) -> Document:
     """Build a document with one story; one paragraph per arg, one run per paragraph."""
-    blocks = [Block(kind="paragraph", runs=[Run(text=p)]) for p in paragraphs]
-    return Document(stories=[Story(blocks=blocks)])
+    doc = Document()
+    blocks = [
+        ParagraphBlock(id=f"p{i}", runs=[Run(text=p)])
+        for i, p in enumerate(paragraphs)
+    ]
+    doc.stories.append(Story(id="s1", blocks=blocks))
+    return doc
 
 
 # --------------------------------------------------------------- find_all
@@ -115,9 +110,14 @@ def test_find_all_scope_story_requires_id() -> None:
 
 
 def test_find_all_scope_story_filters() -> None:
-    s1 = Story(blocks=[Block(runs=[Run(text="needle in story 1")])])
-    s2 = Story(blocks=[Block(runs=[Run(text="needle in story 2")])])
-    doc = Document(stories=[s1, s2])
+    s1 = Story(
+        id="s1", blocks=[ParagraphBlock(id="p1", runs=[Run(text="needle in story 1")])]
+    )
+    s2 = Story(
+        id="s2", blocks=[ParagraphBlock(id="p2", runs=[Run(text="needle in story 2")])]
+    )
+    doc = Document()
+    doc.stories.extend([s1, s2])
     all_matches = find_all(doc, "needle", scope="document")
     assert len(all_matches) == 2
     only_s1 = find_all(doc, "needle", scope="story", story_id=s1.id)
@@ -127,8 +127,9 @@ def test_find_all_scope_story_filters() -> None:
 
 def test_find_all_multi_run_block() -> None:
     """A match that crosses run boundaries is reported with extra_runs."""
-    block = Block(runs=[Run(text="hel"), Run(text="lo world")])
-    doc = Document(stories=[Story(blocks=[block])])
+    block = ParagraphBlock(id="p1", runs=[Run(text="hel"), Run(text="lo world")])
+    doc = Document()
+    doc.stories.append(Story(id="s1", blocks=[block]))
     matches = find_all(doc, "hello")
     assert len(matches) == 1
     m = matches[0]
@@ -146,9 +147,10 @@ def test_find_all_skips_zero_width_regex() -> None:
 
 
 def test_find_all_recurses_into_container_blocks() -> None:
-    inner = Block(runs=[Run(text="needle inside callout")])
-    outer = Block(kind="callout", children=[inner])
-    doc = Document(stories=[Story(blocks=[outer])])
+    inner = ParagraphBlock(id="p_inner", runs=[Run(text="needle inside callout")])
+    outer = CalloutBlock(id="c1", blocks=[inner])
+    doc = Document()
+    doc.stories.append(Story(id="s1", blocks=[outer]))
     matches = find_all(doc, "needle")
     assert len(matches) == 1
     assert matches[0].block_id == inner.id
@@ -163,7 +165,7 @@ def test_replace_all_returns_macro_with_per_match_commands() -> None:
     macro = replace_all(doc, matches, "qux")
     # Three matches, each contributing exactly one ReplaceTextInRunCommand
     # (single-run block).
-    assert len(macro.children) == 3
+    assert len(macro._children) == 3
 
 
 def test_replace_all_redo_then_undo_round_trips() -> None:
@@ -180,7 +182,7 @@ def test_replace_all_redo_then_undo_round_trips() -> None:
 def test_replace_all_empty_matches_is_noop_macro() -> None:
     doc = _doc_with_paragraphs("nothing to do")
     macro = replace_all(doc, [], "x")
-    assert macro.children == []
+    assert macro._children == []
 
 
 def test_replace_all_handles_overlapping_offsets_correctly() -> None:
@@ -196,8 +198,9 @@ def test_replace_all_handles_overlapping_offsets_correctly() -> None:
 
 
 def test_replace_all_cross_run_match() -> None:
-    block = Block(runs=[Run(text="hel"), Run(text="lo!")])
-    doc = Document(stories=[Story(blocks=[block])])
+    block = ParagraphBlock(id="p1", runs=[Run(text="hel"), Run(text="lo!")])
+    doc = Document()
+    doc.stories.append(Story(id="s1", blocks=[block]))
     matches = find_all(doc, "hello")
     macro = replace_all(doc, matches, "HI")
     macro.redo()
