@@ -1,163 +1,214 @@
-"""Stub paragraph + character style model — will be replaced by unit-8.
+"""Paragraph, character, and object styles.
 
-Per spec §4 and §12 worker policy: the style sheets palette unit (#25)
-needs minimal, replaceable stubs of `ParagraphStyle`, `CharacterStyle`,
-and `StyleResolver` so it can be implemented and tested before unit-8
-("model-styles") lands.
+Styles are declarative: every attribute may be `None`, meaning *inherit from
+the `based_on` parent*. `StyleResolver` walks the chain and returns the first
+non-None value.
 
-The real model will live in this same module — these dataclasses define
-the small public surface unit-25 actually consumes (name, based_on,
-basic typographic fields, hierarchical resolve). Replacing them with the
-unit-8 implementation should be a drop-in superset.
+Object-style references to `Stroke` / `Fill` / `Padding` are typed as
+Protocols here so this unit can land before the frame-styling unit (unit-3)
+finalizes their concrete shapes.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
-from typing import Any
+from collections.abc import Iterator
+from dataclasses import dataclass
+from typing import Generic, Literal, Protocol, TypeVar, runtime_checkable
+
+# ---------------------------------------------------------------------------
+# Protocol stubs for cross-unit references (concretized in unit-3).
+# ---------------------------------------------------------------------------
 
 
-class StyleCycleError(ValueError):
-    """Raised when a "based-on" relationship would form a cycle."""
+@runtime_checkable
+class Stroke(Protocol):
+    """Frame stroke. Concrete shape lands in unit-3."""
+
+    @property
+    def width_pt(self) -> float: ...
 
 
-@dataclass
+@runtime_checkable
+class Fill(Protocol):
+    """Frame fill. Concrete shape lands in unit-3."""
+
+    @property
+    def color_ref(self) -> str | None: ...
+
+
+@runtime_checkable
+class Padding(Protocol):
+    """Frame padding (top/right/bottom/left in points). Concrete in unit-3."""
+
+    @property
+    def top_pt(self) -> float: ...
+
+    @property
+    def right_pt(self) -> float: ...
+
+    @property
+    def bottom_pt(self) -> float: ...
+
+    @property
+    def left_pt(self) -> float: ...
+
+
+# ---------------------------------------------------------------------------
+# Literal aliases.
+# ---------------------------------------------------------------------------
+
+
+Alignment = Literal["left", "right", "center", "justify", "start", "end"]
+JustifyMethod = Literal["greedy", "knuth-plass"]
+
+
+# ---------------------------------------------------------------------------
+# Style dataclasses.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
 class ParagraphStyle:
-    """A named paragraph style with a hierarchical 'based on' parent.
-
-    Stub: only carries the fields unit-25 needs for the palette + editor
-    dialog (basic, indents & spacing, tabs, hyphenation, OpenType,
-    paragraph rules). All fields are optional/empty by default — child
-    styles inherit from parents via :class:`StyleResolver`.
-    """
+    """Paragraph-level style. Every attribute except `name` is inheritable."""
 
     name: str
     based_on: str | None = None
-    # Basic
     font_family: str | None = None
-    font_size: float | None = None
-    leading: float | None = None
-    alignment: str | None = None  # left | right | center | justify
-    # Indents & spacing
-    space_before: float | None = None
-    space_after: float | None = None
-    first_line_indent: float | None = None
-    left_indent: float | None = None
-    right_indent: float | None = None
-    # Tabs (list of (position_pt, alignment))
-    tabs: list[tuple[float, str]] = field(default_factory=list)
-    # Hyphenation
+    font_size_pt: float | None = None
+    leading_pt: float | None = None
+    alignment: Alignment | None = None
+    first_indent_pt: float | None = None
+    left_indent_pt: float | None = None
+    right_indent_pt: float | None = None
+    space_before_pt: float | None = None
+    space_after_pt: float | None = None
     hyphenate: bool | None = None
-    hyphenation_zone: float | None = None
-    # OpenType features (set of feature tags, e.g. {"liga", "smcp"})
-    opentype_features: set[str] = field(default_factory=set)
-    # Paragraph rules (above/below) — minimal: thickness, color
-    rule_above_thickness: float | None = None
-    rule_below_thickness: float | None = None
-
-    def clone(self, *, name: str) -> ParagraphStyle:
-        """Return a deep-enough copy with a new name (used by Duplicate)."""
-        return replace(
-            self,
-            name=name,
-            tabs=list(self.tabs),
-            opentype_features=set(self.opentype_features),
-        )
+    justify_method: JustifyMethod | None = None
+    opentype_features: frozenset[str] | None = None
+    align_to_baseline_grid: bool | None = None
+    keep_with_next: bool | None = None
+    keep_lines_together: bool | None = None
 
 
-@dataclass
+@dataclass(slots=True)
 class CharacterStyle:
-    """A named character style with a hierarchical 'based on' parent.
-
-    Stub: only fields needed by the palette + editor dialog.
-    """
+    """Character-level style. Every attribute except `name` is inheritable."""
 
     name: str
     based_on: str | None = None
     font_family: str | None = None
-    font_size: float | None = None
+    font_size_pt: float | None = None
+    color_ref: str | None = None
+    tracking: float | None = None
+    baseline_shift_pt: float | None = None
     bold: bool | None = None
     italic: bool | None = None
     underline: bool | None = None
     strike: bool | None = None
-    tracking: float | None = None
-    baseline_shift: float | None = None
-    color_ref: str | None = None
-    opentype_features: set[str] = field(default_factory=set)
-
-    def clone(self, *, name: str) -> CharacterStyle:
-        return replace(
-            self,
-            name=name,
-            opentype_features=set(self.opentype_features),
-        )
+    opentype_features: frozenset[str] | None = None
+    language_override: str | None = None
 
 
-class StyleResolver:
-    """Resolves "based on" chains, with cycle detection.
+@dataclass(slots=True)
+class ObjectStyle:
+    """Frame defaults. Every attribute except `name` is inheritable."""
 
-    Used by both the palette (to validate user-picked parents in the
-    editor dialog) and — eventually — the layout pipeline.
+    name: str
+    based_on: str | None = None
+    stroke: Stroke | None = None
+    fill: Fill | None = None
+    padding: Padding | None = None
+    columns: int | None = None
+    gutter_pt: float | None = None
+    text_inset_pt: float | None = None
+
+
+# A common upper bound for the resolver — all three styles share `name` +
+# `based_on`. We don't constrain to a Protocol because dataclass attribute
+# access already gives us a structural check via `getattr`.
+Style = ParagraphStyle | CharacterStyle | ObjectStyle
+
+
+# ---------------------------------------------------------------------------
+# Resolver.
+# ---------------------------------------------------------------------------
+
+
+class StyleCycleError(ValueError):
+    """Raised when the based-on chain forms a cycle."""
+
+
+class StyleNotFoundError(KeyError):
+    """Raised when the based-on chain references an unknown style name."""
+
+
+_S = TypeVar("_S", ParagraphStyle, CharacterStyle, ObjectStyle)
+
+
+class StyleResolver(Generic[_S]):
+    """Resolves attribute values along a style's `based_on` chain.
+
+    Constructed with a registry (`name -> Style`) and a starting style name.
+    `resolve_attribute("font_size_pt")` returns the first non-None value
+    encountered as we walk based_on links. Returns `None` if no ancestor
+    sets the attribute.
+
+    Cycles raise `StyleCycleError`. Missing parents raise
+    `StyleNotFoundError` — fail-fast is preferred over silently truncating
+    inheritance.
     """
 
-    @staticmethod
-    def detect_cycle(
-        styles: dict[str, ParagraphStyle] | dict[str, CharacterStyle],
-        name: str,
-        proposed_based_on: str | None,
-    ) -> bool:
-        """Return True if setting ``styles[name].based_on = proposed_based_on``
-        would introduce a cycle.
+    __slots__ = ("_registry", "_start_name")
 
-        - Self-reference is a cycle.
-        - Walking the parent chain back to ``name`` is a cycle.
-        - Unknown parent names are *not* a cycle (just unresolved).
-        """
-        if proposed_based_on is None:
-            return False
-        if proposed_based_on == name:
-            return True
-        seen: set[str] = {name}
-        current: str | None = proposed_based_on
-        while current is not None:
-            if current in seen:
-                return True
-            seen.add(current)
-            parent = styles.get(current)
-            if parent is None:
-                return False
-            current = parent.based_on
-        return False
+    _registry: dict[str, _S]
+    _start_name: str
 
-    @staticmethod
-    def chain(
-        styles: dict[str, ParagraphStyle] | dict[str, CharacterStyle],
-        name: str,
-    ) -> list[str]:
-        """Return [name, parent, grandparent, ...] until the chain ends or
-        a cycle is detected (in which case the cycle node is excluded)."""
-        out: list[str] = []
-        seen: set[str] = set()
-        current: str | None = name
-        while current is not None and current not in seen:
-            if current not in styles:
-                break
-            out.append(current)
-            seen.add(current)
-            current = styles[current].based_on
-        return out
+    def __init__(self, registry: dict[str, _S], start_name: str) -> None:
+        if start_name not in registry:
+            raise StyleNotFoundError(start_name)
+        self._registry = registry
+        self._start_name = start_name
 
-    @staticmethod
-    def resolve(
-        styles: dict[str, Any],
-        name: str,
-        attr: str,
-    ) -> Any:
-        """Walk the based-on chain and return the first non-None value of
-        ``attr``, or None if every ancestor leaves it unset.
-        """
-        for ancestor in StyleResolver.chain(styles, name):
-            value = getattr(styles[ancestor], attr, None)
+    def resolve_attribute(self, attr_name: str) -> object:
+        for style in self._walk():
+            value = getattr(style, attr_name, None)
             if value is not None:
                 return value
         return None
+
+    def _walk(self) -> Iterator[_S]:
+        # `seen` is a list (not a set) so the cycle error message reports the
+        # chain in walk order; membership checks are still O(1) amortized via
+        # the parallel `seen_names` set.
+        seen: list[str] = []
+        seen_names: set[str] = set()
+        name: str | None = self._start_name
+        while name is not None:
+            if name in seen_names:
+                raise StyleCycleError(
+                    f"cycle in based_on chain: {' -> '.join([*seen, name])}"
+                )
+            seen.append(name)
+            seen_names.add(name)
+            try:
+                style = self._registry[name]
+            except KeyError as exc:
+                raise StyleNotFoundError(name) from exc
+            yield style
+            name = style.based_on
+
+
+__all__ = [
+    "Alignment",
+    "CharacterStyle",
+    "Fill",
+    "JustifyMethod",
+    "ObjectStyle",
+    "Padding",
+    "ParagraphStyle",
+    "Stroke",
+    "Style",
+    "StyleCycleError",
+    "StyleNotFoundError",
+    "StyleResolver",
+]

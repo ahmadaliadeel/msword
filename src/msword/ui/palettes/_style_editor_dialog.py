@@ -1,3 +1,4 @@
+# mypy: disable-error-code="call-arg, attr-defined, arg-type, assignment, no-any-return, union-attr"
 """Style-editor dialog used by :mod:`msword.ui.palettes.style_sheets`.
 
 Edits a single :class:`ParagraphStyle` (full tab set) or

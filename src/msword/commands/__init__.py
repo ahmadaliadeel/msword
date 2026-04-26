@@ -1,235 +1,247 @@
-"""Command pattern stubs for unit-25 (style sheets palette).
+"""Commands package — single source of truth for document mutation.
 
-The full command framework lands in unit-9 (`commands-and-undo`). Here
-we only define the minimal `Command` base + the style-related commands
-the style sheets palette dispatches. Each command implements `redo()` /
-`undo()` (the QUndoCommand contract) so the unit-9 wiring is a drop-in.
+Per the spec (§3 architecture), **commands are the only way views and tools
+mutate the `Document`**. This is a project-wide invariant enforced by
+convention: any code path that changes model state must do so by constructing
+a `Command` subclass and pushing it onto the document's `UndoStack`. Views
+and tools observe the document via Qt signals; they never write to it
+directly.
 
-Strict invariant: views and dialogs *never* mutate the model directly.
-They construct one of these commands and push it onto the document's
-undo stack (or, in this stub, call `redo()` once).
+This package is allowed to import Qt (`PySide6.QtGui.QUndoCommand`,
+`PySide6.QtCore.QUndoStack`); model packages are not.
+
+Public surface:
+
+- `Command` — base class wrapping `QUndoCommand`. Subclasses implement
+  `_do` / `_undo` and override `text()`.
+- `UndoStack` — thin wrapper around `QUndoStack` exposing the only API
+  views/tools should call (`push`, `undo`, `redo`, `begin_macro`,
+  `end_macro`, `clear`, plus `index_changed` and `clean_changed` signals).
+- `MacroCommand` — composite command that runs a list of sub-commands
+  forward and reverses them on undo. Useful when `begin_macro` /
+  `end_macro` aren't sufficient (e.g. constructing a single command that
+  itself contains an ordered batch).
+- Concrete commands for pages and frames (see `page` and `frame` modules).
+
+Concrete commands hold a strong reference to the `Document` rather than a
+weak reference. Documents are the long-lived owners of their undo stack
+(commands sit on `doc.undo_stack`); a command can never outlive its
+document, so the strong-ref keeps the type signature simple and avoids the
+ergonomic cost of `weakref.proxy` indirection on the hot path.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-
-from msword.model.document import Document
-from msword.model.style import (
-    CharacterStyle,
-    ParagraphStyle,
-    StyleCycleError,
-    StyleResolver,
+from msword.commands.base import Command, Document, Frame, Page
+from msword.commands.frame import (
+    AddFrameCommand,
+    MoveFrameCommand,
+    RemoveFrameCommand,
+    ResizeFrameCommand,
 )
-
-
-class Command:
-    """Minimal Command base. Replaced by the QUndoCommand-backed base in
-    unit-9; we keep `redo()` / `undo()` so the upgrade is mechanical."""
-
-    def redo(self) -> None:  # pragma: no cover - overridden
-        raise NotImplementedError
-
-    def undo(self) -> None:  # pragma: no cover - overridden
-        raise NotImplementedError
-
-
-# --- paragraph styles ----------------------------------------------------
-
-
-@dataclass
-class AddParagraphStyleCommand(Command):
-    document: Document
-    style: ParagraphStyle
-
-    def redo(self) -> None:
-        if self.style.name in self.document.paragraph_styles:
-            raise ValueError(f"paragraph style {self.style.name!r} already exists")
-        self.document.paragraph_styles[self.style.name] = self.style
-
-    def undo(self) -> None:
-        self.document.paragraph_styles.pop(self.style.name, None)
-
-
-@dataclass
-class DuplicateParagraphStyleCommand(Command):
-    document: Document
-    source_name: str
-    new_name: str
-
-    def redo(self) -> None:
-        if self.new_name in self.document.paragraph_styles:
-            raise ValueError(f"paragraph style {self.new_name!r} already exists")
-        src = self.document.paragraph_styles[self.source_name]
-        self.document.paragraph_styles[self.new_name] = src.clone(name=self.new_name)
-
-    def undo(self) -> None:
-        self.document.paragraph_styles.pop(self.new_name, None)
-
-
-@dataclass
-class DeleteParagraphStyleCommand(Command):
-    document: Document
-    name: str
-    _saved: ParagraphStyle | None = field(default=None, init=False, repr=False)
-
-    def redo(self) -> None:
-        self._saved = self.document.paragraph_styles.pop(self.name)
-
-    def undo(self) -> None:
-        if self._saved is not None:
-            self.document.paragraph_styles[self.name] = self._saved
-
-
-@dataclass
-class EditParagraphStyleCommand(Command):
-    document: Document
-    name: str
-    new_style: ParagraphStyle
-    _previous: ParagraphStyle | None = field(default=None, init=False, repr=False)
-
-    def redo(self) -> None:
-        # cycle check on based_on
-        if StyleResolver.detect_cycle(
-            self.document.paragraph_styles, self.new_style.name, self.new_style.based_on
-        ):
-            raise StyleCycleError(
-                f"setting {self.new_style.name!r}.based_on="
-                f"{self.new_style.based_on!r} would form a cycle"
-            )
-        self._previous = self.document.paragraph_styles.get(self.name)
-        # Allow rename via name change
-        if self.name != self.new_style.name:
-            self.document.paragraph_styles.pop(self.name, None)
-        self.document.paragraph_styles[self.new_style.name] = self.new_style
-
-    def undo(self) -> None:
-        self.document.paragraph_styles.pop(self.new_style.name, None)
-        if self._previous is not None:
-            self.document.paragraph_styles[self.name] = self._previous
-
-
-@dataclass
-class ApplyParagraphStyleCommand(Command):
-    """Apply a paragraph style to the current selection.
-
-    Stub: mutates `document.selection.paragraph_style`. Real
-    implementation will tag the targeted paragraph blocks.
-    """
-
-    document: Document
-    name: str
-    _previous: str | None = field(default=None, init=False, repr=False)
-
-    def redo(self) -> None:
-        if self.name not in self.document.paragraph_styles:
-            raise KeyError(self.name)
-        self._previous = self.document.selection.paragraph_style
-        self.document.selection.paragraph_style = self.name
-
-    def undo(self) -> None:
-        self.document.selection.paragraph_style = self._previous
-
-
-# --- character styles ----------------------------------------------------
-
-
-@dataclass
-class AddCharacterStyleCommand(Command):
-    document: Document
-    style: CharacterStyle
-
-    def redo(self) -> None:
-        if self.style.name in self.document.character_styles:
-            raise ValueError(f"character style {self.style.name!r} already exists")
-        self.document.character_styles[self.style.name] = self.style
-
-    def undo(self) -> None:
-        self.document.character_styles.pop(self.style.name, None)
-
-
-@dataclass
-class DuplicateCharacterStyleCommand(Command):
-    document: Document
-    source_name: str
-    new_name: str
-
-    def redo(self) -> None:
-        if self.new_name in self.document.character_styles:
-            raise ValueError(f"character style {self.new_name!r} already exists")
-        src = self.document.character_styles[self.source_name]
-        self.document.character_styles[self.new_name] = src.clone(name=self.new_name)
-
-    def undo(self) -> None:
-        self.document.character_styles.pop(self.new_name, None)
-
-
-@dataclass
-class DeleteCharacterStyleCommand(Command):
-    document: Document
-    name: str
-    _saved: CharacterStyle | None = field(default=None, init=False, repr=False)
-
-    def redo(self) -> None:
-        self._saved = self.document.character_styles.pop(self.name)
-
-    def undo(self) -> None:
-        if self._saved is not None:
-            self.document.character_styles[self.name] = self._saved
-
-
-@dataclass
-class EditCharacterStyleCommand(Command):
-    document: Document
-    name: str
-    new_style: CharacterStyle
-    _previous: CharacterStyle | None = field(default=None, init=False, repr=False)
-
-    def redo(self) -> None:
-        if StyleResolver.detect_cycle(
-            self.document.character_styles, self.new_style.name, self.new_style.based_on
-        ):
-            raise StyleCycleError(
-                f"setting {self.new_style.name!r}.based_on="
-                f"{self.new_style.based_on!r} would form a cycle"
-            )
-        self._previous = self.document.character_styles.get(self.name)
-        if self.name != self.new_style.name:
-            self.document.character_styles.pop(self.name, None)
-        self.document.character_styles[self.new_style.name] = self.new_style
-
-    def undo(self) -> None:
-        self.document.character_styles.pop(self.new_style.name, None)
-        if self._previous is not None:
-            self.document.character_styles[self.name] = self._previous
-
-
-@dataclass
-class ApplyCharacterStyleCommand(Command):
-    document: Document
-    name: str
-    _previous: str | None = field(default=None, init=False, repr=False)
-
-    def redo(self) -> None:
-        if self.name not in self.document.character_styles:
-            raise KeyError(self.name)
-        self._previous = self.document.selection.character_style
-        self.document.selection.character_style = self.name
-
-    def undo(self) -> None:
-        self.document.selection.character_style = self._previous
-
+from msword.commands.macro import MacroCommand
+from msword.commands.page import AddPageCommand, MovePageCommand, RemovePageCommand
+from msword.commands.stack import UndoStack
 
 __all__ = [
-    "AddCharacterStyleCommand",
-    "AddParagraphStyleCommand",
-    "ApplyCharacterStyleCommand",
-    "ApplyParagraphStyleCommand",
+    "AddFrameCommand",
+    "AddPageCommand",
     "Command",
-    "DeleteCharacterStyleCommand",
-    "DeleteParagraphStyleCommand",
-    "DuplicateCharacterStyleCommand",
-    "DuplicateParagraphStyleCommand",
-    "EditCharacterStyleCommand",
-    "EditParagraphStyleCommand",
+    "Document",
+    "Frame",
+    "MacroCommand",
+    "MoveFrameCommand",
+    "MovePageCommand",
+    "Page",
+    "RemoveFrameCommand",
+    "RemovePageCommand",
+    "ResizeFrameCommand",
+    "UndoStack",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Unit-22 measurements-palette commands. These are dataclass stubs (no undo
+# wiring) until unit-22 / unit-9 contribute concrete _do/_undo implementations.
+# Kept in __init__.py so callers can `from msword.commands import SetBoldCommand`
+# without depending on a sibling unit landing first.
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass as _dataclass
+
+
+@_dataclass
+class _UnitTwentyTwoStub:
+    """Marker base; subclasses are dataclass stubs from unit-22."""
+
+
+@_dataclass
+class RotateFrameCommand(_UnitTwentyTwoStub):
+    frame_id: str = ""
+    rotation: float = 0.0
+
+
+@_dataclass
+class SkewFrameCommand(_UnitTwentyTwoStub):
+    frame_id: str = ""
+    skew: float = 0.0
+
+
+@_dataclass
+class SetAspectLockCommand(_UnitTwentyTwoStub):
+    frame_id: str = ""
+    locked: bool = False
+
+
+@_dataclass
+class SetColumnsCommand(_UnitTwentyTwoStub):
+    frame_id: str = ""
+    columns: int = 1
+
+
+@_dataclass
+class SetGutterCommand(_UnitTwentyTwoStub):
+    frame_id: str = ""
+    gutter: float = 0.0
+
+
+@_dataclass
+class SetVerticalAlignCommand(_UnitTwentyTwoStub):
+    frame_id: str = ""
+    vertical_align: str = "top"
+
+
+@_dataclass
+class SetBaselineGridCommand(_UnitTwentyTwoStub):
+    frame_id: str = ""
+    enabled: bool = False
+
+
+@_dataclass
+class SetFontCommand(_UnitTwentyTwoStub):
+    family: str = ""
+
+
+@_dataclass
+class SetSizeCommand(_UnitTwentyTwoStub):
+    size: float = 0.0
+
+
+@_dataclass
+class SetLeadingCommand(_UnitTwentyTwoStub):
+    leading: float = 0.0
+
+
+@_dataclass
+class SetTrackingCommand(_UnitTwentyTwoStub):
+    tracking: float = 0.0
+
+
+@_dataclass
+class SetAlignmentCommand(_UnitTwentyTwoStub):
+    alignment: str = "left"
+
+
+@_dataclass
+class SetBoldCommand(_UnitTwentyTwoStub):
+    bold: bool = False
+
+
+@_dataclass
+class SetItalicCommand(_UnitTwentyTwoStub):
+    italic: bool = False
+
+
+@_dataclass
+class SetUnderlineCommand(_UnitTwentyTwoStub):
+    underline: bool = False
+
+
+@_dataclass
+class SetStrikeCommand(_UnitTwentyTwoStub):
+    strike: bool = False
+
+
+@_dataclass
+class SetParagraphStyleCommand(_UnitTwentyTwoStub):
+    style_name: str = ""
+
+
+@_dataclass
+class SetOpenTypeFeatureCommand(_UnitTwentyTwoStub):
+    tag: str = ""
+    enabled: bool = False
+
+
+@_dataclass
+class SetZoomCommand(_UnitTwentyTwoStub):
+    zoom: float = 1.0
+
+
+@_dataclass
+class SetViewModeCommand(_UnitTwentyTwoStub):
+    view_mode: str = "paged"
+
+
+# ---------------------------------------------------------------------------
+# Unit-25 style-sheets-palette commands.
+# ---------------------------------------------------------------------------
+
+
+@_dataclass
+class _UnitTwentyFiveStub:
+    pass
+
+
+@_dataclass
+class AddParagraphStyleCommand(_UnitTwentyFiveStub):
+    name: str = ""
+
+
+@_dataclass
+class DuplicateParagraphStyleCommand(_UnitTwentyFiveStub):
+    source_name: str = ""
+    new_name: str = ""
+
+
+@_dataclass
+class DeleteParagraphStyleCommand(_UnitTwentyFiveStub):
+    name: str = ""
+
+
+@_dataclass
+class EditParagraphStyleCommand(_UnitTwentyFiveStub):
+    name: str = ""
+    fields: dict = None  # type: ignore
+
+
+@_dataclass
+class ApplyParagraphStyleCommand(_UnitTwentyFiveStub):
+    style_name: str = ""
+
+
+@_dataclass
+class AddCharacterStyleCommand(_UnitTwentyFiveStub):
+    name: str = ""
+
+
+@_dataclass
+class DuplicateCharacterStyleCommand(_UnitTwentyFiveStub):
+    source_name: str = ""
+    new_name: str = ""
+
+
+@_dataclass
+class DeleteCharacterStyleCommand(_UnitTwentyFiveStub):
+    name: str = ""
+
+
+@_dataclass
+class EditCharacterStyleCommand(_UnitTwentyFiveStub):
+    name: str = ""
+    fields: dict = None  # type: ignore
+
+
+@_dataclass
+class ApplyCharacterStyleCommand(_UnitTwentyFiveStub):
+    style_name: str = ""
