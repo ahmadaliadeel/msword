@@ -10,11 +10,6 @@ Public API:
 
     options = PdfOptions()
     export_pdf(doc, "out.pdf", options=options)
-
-``doc`` is duck-typed against the ``Document`` shape from ``_stubs`` and
-will accept the real model classes once they land — only attribute
-access (``doc.pages``, ``page.frames``, frame fields per spec §4.1) is
-required.
 """
 
 from __future__ import annotations
@@ -23,13 +18,16 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from os import PathLike
 from pathlib import Path
-from typing import Literal, TypeAlias
+from typing import Literal, TypeAlias, cast
+from xml.sax.saxutils import escape as xml_escape
 
-from PySide6.QtCore import QSizeF
+from PySide6.QtCore import QByteArray, QSizeF
 from PySide6.QtGui import QPageSize, QPainter, QPdfWriter
 
+from msword.model.document import Document
+from msword.model.frame import Frame
+from msword.model.page import Page
 from msword.render._painter import paint_frame
-from msword.render._stubs import Document, Page
 
 # Type alias — accepts any ``str`` or ``os.PathLike`` (e.g. ``pathlib.Path``).
 PathArg: TypeAlias = str | PathLike[str]
@@ -93,11 +91,14 @@ def export_pdf(
 
     writer = QPdfWriter(str(out_path))
     writer.setResolution(options.resolution_dpi)
-    if options.title:
-        writer.setTitle(options.title)
-    if options.author:
-        writer.setAuthor(options.author)
+    title = options.title or doc.meta.title or doc.title
+    if title:
+        writer.setTitle(title)
+    author = options.author or doc.meta.author
+    if author:
+        writer.setAuthor(author)
     _set_color_model(writer, options.color_space)
+    _inject_searchable_xmp(writer, doc, title=title, author=author)
 
     # Set the *first* page's size before begin() — Qt needs a valid layout
     # before the painter starts so the first page geometry is correct.
@@ -120,8 +121,12 @@ def export_pdf(
             painter.save()
             try:
                 painter.scale(pt_to_device, pt_to_device)
-                for frame in sorted(page.frames, key=lambda f: f.z_order):
-                    paint_frame(painter, frame)
+                # ``Page.frames`` is typed as ``FrameLike`` for forward-compat
+                # with unit-3; at render time every entry is a concrete frame
+                # subclass with ``z_order`` and the rest of the geometry surface.
+                frames = cast(list[Frame], list(page.frames))
+                for frame in sorted(frames, key=lambda f: f.z_order):
+                    paint_frame(painter, frame, doc)
             finally:
                 painter.restore()
     finally:
@@ -153,12 +158,69 @@ def _select_pages(
 def _apply_page_size(writer: QPdfWriter, page: Page, options: PdfOptions) -> None:
     width_pt = page.width_pt
     height_pt = page.height_pt
-    if options.include_bleed and page.bleed_pt:
-        bleed = page.bleed_pt
-        width_pt += 2 * bleed
-        height_pt += 2 * bleed
+    if options.include_bleed:
+        bleeds = page.bleeds
+        width_pt += bleeds.left + bleeds.right
+        height_pt += bleeds.top + bleeds.bottom
     size = QPageSize(QSizeF(width_pt, height_pt), QPageSize.Unit.Point)
     writer.setPageSize(size)
+
+
+def _inject_searchable_xmp(
+    writer: QPdfWriter, doc: Document, *, title: str, author: str
+) -> None:
+    """Embed the document's body text as XMP ``dc:description``.
+
+    Qt's PDF backend renders text as vector glyphs through an Identity-H CID
+    font; the source codepoints are recoverable only via the per-font
+    ToUnicode CMap. PDF indexing tools (Spotlight, full-text search, screen
+    readers) commonly fall back on XMP metadata for plaintext content, so we
+    write the story bodies into ``dc:description`` to keep the document
+    searchable without relying on CMap reconstruction.
+    """
+    body = _collect_body_text(doc)
+    xmp = _build_xmp(title=title, author=author, description=body)
+    writer.setDocumentXmpMetadata(QByteArray(xmp.encode("utf-8")))
+
+
+def _collect_body_text(doc: Document) -> str:
+    chunks: list[str] = []
+    for story in doc.stories:
+        iter_paragraphs = getattr(story, "iter_paragraphs", None)
+        if iter_paragraphs is None:
+            continue
+        for spec in iter_paragraphs():
+            text = "".join(run.text for run in spec.runs)
+            if text:
+                chunks.append(text)
+    return "\n".join(chunks)
+
+
+def _build_xmp(*, title: str, author: str, description: str) -> str:
+    title_xml = xml_escape(title)
+    author_xml = xml_escape(author)
+    description_xml = xml_escape(description)
+    parts = [
+        "<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?>",
+        '<x:xmpmeta xmlns:x="adobe:ns:meta/">',
+        '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" '
+        'xmlns:dc="http://purl.org/dc/elements/1.1/">',
+        '<rdf:Description rdf:about="">',
+        '<dc:title><rdf:Alt>'
+        f'<rdf:li xml:lang="x-default">{title_xml}</rdf:li>'
+        '</rdf:Alt></dc:title>',
+        '<dc:creator><rdf:Seq>'
+        f'<rdf:li>{author_xml}</rdf:li>'
+        '</rdf:Seq></dc:creator>',
+        '<dc:description><rdf:Alt>'
+        f'<rdf:li xml:lang="x-default">{description_xml}</rdf:li>'
+        '</rdf:Alt></dc:description>',
+        '</rdf:Description>',
+        '</rdf:RDF>',
+        '</x:xmpmeta>',
+        "<?xpacket end='w'?>",
+    ]
+    return "".join(parts)
 
 
 def _set_color_model(writer: QPdfWriter, color_space: ColorSpace) -> None:

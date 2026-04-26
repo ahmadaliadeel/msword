@@ -103,9 +103,6 @@ class Page:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Page:
-        # Frames stay opaque at this layer — unit-3 provides a real factory.
-        # We round-trip an empty frame list; callers that need full frame
-        # rehydration go through the full document loader (unit-10).
         return cls(
             id=str(data["id"]),
             master_id=data.get("master_id"),
@@ -114,5 +111,22 @@ class Page:
             margins=Margins.from_dict(data.get("margins", {})),
             bleeds=Bleeds.from_dict(data.get("bleeds", {})),
             background_color_ref=data.get("background_color_ref"),
-            frames=[],
+            frames=[_frame_from_dict(f) for f in data.get("frames", [])],
         )
+
+
+def _frame_from_dict(data: dict[str, Any]) -> FrameLike:
+    """Resolve a serialized frame to its concrete model class.
+
+    The :class:`msword.model.frame.Frame` registry handles ``text`` /
+    ``image`` / ``shape`` / ``group`` kinds; ``table`` lives in unit-7's
+    :class:`msword.model.table_frame.TableFrame`.
+    """
+    kind = data.get("kind")
+    if kind == "table":
+        from msword.model.table_frame import TableFrame
+
+        return TableFrame.from_dict(data)
+    from msword.model.frame import Frame
+
+    return Frame.from_dict(data)

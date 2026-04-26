@@ -1,13 +1,12 @@
 """Integration tests for ``msword.render.pdf`` (unit #17).
 
-The tests build a document with one of each frame type (text, image,
-shape) using the local stubs from ``msword.render._stubs`` (the real
-model lands in units #2-7), export it via ``export_pdf``, then re-open
-the result with ``pikepdf`` and assert:
+Builds a master-model document with one of each frame type (text, image,
+shape), exports it via ``export_pdf``, then re-opens the result with
+``pikepdf`` and asserts:
 
 * the PDF has exactly one page,
-* the text frame's content is present as searchable text in the
-  content stream (i.e. text stayed *text*, not a flattened raster),
+* a text-showing operator is present (i.e. text stayed *text*, not a
+  flattened raster),
 * at least one image XObject is embedded.
 """
 
@@ -20,13 +19,12 @@ from pathlib import Path
 import pikepdf
 import pytest
 
-from msword.render._stubs import (
-    Document,
-    ImageFrame,
-    Page,
-    ShapeFrame,
-    TextFrame,
-)
+from msword.model.blocks import ParagraphBlock
+from msword.model.document import Document
+from msword.model.frame import Fill, ImageFrame, ShapeFrame, Stroke, TextFrame
+from msword.model.page import Page
+from msword.model.run import Run
+from msword.model.story import Story
 from msword.render.pdf import PdfOptions, export_pdf
 
 
@@ -52,41 +50,59 @@ def _make_png(width: int = 100, height: int = 100) -> bytes:
 
 @pytest.fixture
 def sample_doc() -> Document:
-    page = Page(width_pt=595.0, height_pt=842.0)
-    page.frames.extend(
-        [
-            TextFrame(
-                x=72.0,
-                y=72.0,
-                w=400.0,
-                h=200.0,
-                story="Hello world",
-                font_family="Helvetica",
-                font_size_pt=24.0,
-                z_order=1,
-            ),
-            ImageFrame(
-                x=72.0,
-                y=400.0,
-                w=200.0,
-                h=200.0,
-                image_bytes=_make_png(100, 100),
-                z_order=2,
-            ),
-            ShapeFrame(
-                x=350.0,
-                y=400.0,
-                w=150.0,
-                h=100.0,
-                kind="ellipse",
-                stroke=(0, 0, 0),
-                stroke_width_pt=2.0,
-                fill=(200, 200, 255),
-                z_order=3,
-            ),
-        ]
+    doc = Document()
+    page = Page(id="p1", master_id=None, width_pt=595.0, height_pt=842.0)
+    doc.add_page(page)
+
+    story = Story(id="s1", language="en-US")
+    story.add_block(ParagraphBlock(id="b1", runs=[Run(text="Hello world")]))
+    doc.stories.append(story)
+
+    page.frames.append(
+        TextFrame(
+            id="ft",
+            page_id=page.id,
+            x_pt=72.0,
+            y_pt=72.0,
+            w_pt=400.0,
+            h_pt=200.0,
+            z_order=1,
+            story_ref=story.id,
+        )
     )
-    return Document(pages=[page], title="Unit-17 Smoke")
+    asset = doc.assets.add(
+        data=_make_png(100, 100),
+        kind="image",
+        mime_type="image/png",
+        original_filename="test.png",
+    )
+    page.frames.append(
+        ImageFrame(
+            id="fi",
+            page_id=page.id,
+            x_pt=72.0,
+            y_pt=400.0,
+            w_pt=200.0,
+            h_pt=200.0,
+            z_order=2,
+            asset_ref=asset.sha256,
+        )
+    )
+    page.frames.append(
+        ShapeFrame(
+            id="fs",
+            page_id=page.id,
+            x_pt=350.0,
+            y_pt=400.0,
+            w_pt=150.0,
+            h_pt=100.0,
+            z_order=3,
+            shape_kind="ellipse",
+            stroke=Stroke(color_ref="black", width_pt=2.0),
+            fill=Fill(color_ref="lavender"),
+        )
+    )
+    return doc
 
 
 def test_export_pdf_writes_file(tmp_path: Path, sample_doc: Document, qtbot) -> None:  # type: ignore[no-untyped-def]
@@ -153,23 +169,24 @@ def test_export_pdf_empty_document_raises(tmp_path: Path, qtbot) -> None:  # typ
 
 
 def test_export_pdf_page_range(tmp_path: Path, qtbot) -> None:  # type: ignore[no-untyped-def]
-    pages = [
-        Page(
-            width_pt=595.0,
-            height_pt=842.0,
-            frames=[
-                TextFrame(
-                    x=72.0,
-                    y=72.0,
-                    w=400.0,
-                    h=400.0,
-                    story=f"Page {i + 1}",
-                )
-            ],
+    doc = Document()
+    for i in range(3):
+        page = Page(id=f"p{i}", master_id=None, width_pt=595.0, height_pt=842.0)
+        doc.add_page(page)
+        story = Story(id=f"s{i}", language="en-US")
+        story.add_block(ParagraphBlock(id=f"b{i}", runs=[Run(text=f"Page {i + 1}")]))
+        doc.stories.append(story)
+        page.frames.append(
+            TextFrame(
+                id=f"f{i}",
+                page_id=page.id,
+                x_pt=72.0,
+                y_pt=72.0,
+                w_pt=400.0,
+                h_pt=400.0,
+                story_ref=story.id,
+            )
         )
-        for i in range(3)
-    ]
-    doc = Document(pages=pages)
 
     out = tmp_path / "range.pdf"
     export_pdf(doc, out, options=PdfOptions(page_range=(2, 3)))

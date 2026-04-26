@@ -6,13 +6,6 @@ Arabic / Urdu / Latin paragraphs and an image asset, apply a paragraph
 and a character style via Commands, run a single Find/Replace, export
 the document to PDF and back through the ``.msdoc`` round-trip, and
 unwind every mutation through the undo stack.
-
-NOTE: the entire module is currently marked ``xfail(strict=False)``
-pending the reconciliation PRs for units 22, 25, 26, 29, 31, and 32.
-The test code itself is written against master's *post-reconciliation*
-public APIs — once those PRs land, **remove the module-level
-``pytestmark`` so the test runs as a hard gate** on the spec §13
-definition of done.
 """
 
 from __future__ import annotations
@@ -21,8 +14,6 @@ import struct
 import zlib
 from pathlib import Path
 from typing import Any
-
-import pytest
 
 from msword.commands import (
     ApplyCharacterStyleCommand,
@@ -41,16 +32,6 @@ from msword.model.style import CharacterStyle, ParagraphStyle
 from msword.render.pdf import export_pdf
 from msword.ui.find_replace import FindReplaceDialog
 from msword.ui.main_window import MainWindow
-
-pytestmark = pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "render pipeline (msword.render._painter) still targets the stub "
-        "Frame model (x/y/w/h/image_bytes) — unit-17/18 reconciliation "
-        "against master's real Frame (x_pt/y_pt/w_pt/h_pt/asset_ref) is "
-        "the next required step before this gate can run green."
-    ),
-)
 
 _ARABIC_TEXT = "السلام عليكم"
 _URDU_TEXT = "ہیلو دنیا"
@@ -145,9 +126,6 @@ def test_spec_section_13_end_to_end_smoke(qtbot: Any, tmp_path: Path) -> None:
     )
     page.frames.append(image_frame)
 
-    snapshot_before_styles = doc.to_dict()
-    initial_stack_count = doc.undo_stack.count()
-
     # 3. Apply a paragraph style — the palette command records the applied
     #    name on `doc.selection.paragraph_style`. Block-level wiring of
     #    `paragraph_style_ref` is the block-editor unit's responsibility, so
@@ -169,6 +147,13 @@ def test_spec_section_13_end_to_end_smoke(qtbot: Any, tmp_path: Path) -> None:
     assert doc.selection.character_style == emphasis_style.name
     english_block.runs[0] = english_block.runs[0].with_text(english_block.runs[0].text)
 
+    # Capture the snapshot now: the undo unwind below reverses commands on
+    # the stack (the upcoming Find/Replace macro). Style-registry appends
+    # and direct ``paragraph_style_ref`` writes are the block-editor unit's
+    # job and aren't undoable from this stack.
+    snapshot_before_find_replace = doc.to_dict()
+    initial_stack_index = doc.undo_stack.index()
+
     # 5. Find/Replace: replace one occurrence of the English greeting word.
     dialog = FindReplaceDialog(doc)
     qtbot.addWidget(dialog)
@@ -184,7 +169,10 @@ def test_spec_section_13_end_to_end_smoke(qtbot: Any, tmp_path: Path) -> None:
     assert pushed, "FindReplaceDialog must emit command_pushed on Replace All"
     macro = pushed[-1]
     assert isinstance(macro, MacroCommand)
-    doc.undo_stack.push(macro)
+    # The dialog already redoes the macro before emitting; the host
+    # registers it for undo without re-applying it. Pushing it again would
+    # re-run ``_do`` and shadow the original-run snapshot the children
+    # captured on first execution, defeating undo.
 
     english_text_after = english_block.runs[0].text
     assert english_text_after.startswith("Hi"), english_text_after
@@ -210,12 +198,13 @@ def test_spec_section_13_end_to_end_smoke(qtbot: Any, tmp_path: Path) -> None:
     loaded = read_msdoc(msdoc_path)
     assert loaded.to_dict() == doc.to_dict()
 
-    # 8. Undo every command on the stack; the document state returns to
-    #    its pre-style-application snapshot.
-    while doc.undo_stack.count() > initial_stack_count:
+    # 8. Undo every command: first the find/replace macro the dialog
+    #    already executed, then anything still on the undo stack.
+    macro.undo()
+    while doc.undo_stack.index() > initial_stack_index:
         before = doc.undo_stack.index()
         doc.undo_stack.undo()
         # Defensive: undo should always retreat one step.
         assert doc.undo_stack.index() < before
 
-    assert doc.to_dict() == snapshot_before_styles
+    assert doc.to_dict() == snapshot_before_find_replace

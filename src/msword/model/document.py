@@ -278,14 +278,14 @@ class Document(QObject):
         """
         return {
             "meta": self.meta.to_dict(),
-            "color_profiles": list(self.color_profiles),
-            "color_swatches": list(self.color_swatches),
-            "paragraph_styles": list(self.paragraph_styles),
-            "character_styles": list(self.character_styles),
-            "object_styles": list(self.object_styles),
+            "color_profiles": [_to_jsonable(p) for p in self.color_profiles],
+            "color_swatches": [_to_jsonable(s) for s in self.color_swatches],
+            "paragraph_styles": [_to_jsonable(s) for s in self.paragraph_styles],
+            "character_styles": [_to_jsonable(s) for s in self.character_styles],
+            "object_styles": [_to_jsonable(s) for s in self.object_styles],
             "master_pages": [m.to_dict() for m in self.master_pages],
             "pages": [p.to_dict() for p in self.pages],
-            "stories": list(self.stories),
+            "stories": [_to_jsonable(s) for s in self.stories],
             "assets": [a.to_dict() for a in self.assets],
         }
 
@@ -304,3 +304,19 @@ class Document(QObject):
         # Asset *bytes* are not in the JSON snapshot — see `to_dict`. The full
         # reader (unit-10) populates `doc.assets` from the ZIP payload.
         return doc
+
+
+def _to_jsonable(value: Any) -> Any:
+    """Serialize a registry entry (style, swatch, profile, story) to JSON.
+
+    Prefers an explicit ``to_dict()`` when defined; otherwise walks plain
+    dataclasses. Anything else round-trips unchanged so test stubs stay
+    transparent.
+    """
+    from dataclasses import asdict, is_dataclass
+
+    if hasattr(value, "to_dict"):
+        return value.to_dict()
+    if is_dataclass(value) and not isinstance(value, type):
+        return asdict(value)
+    return value
