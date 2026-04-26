@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE TS>
+<TS version="2.1" language="ur" sourcelanguage="en_US">
+<context>
+    <name>msword</name>
+    <message>
+        <source>File</source>
+        <translation>فائل</translation>
+    </message>
+    <message>
+        <source>Edit</source>
+        <translation>ترمیم</translation>
+    </message>
+    <message>
+        <source>Style</source>
+        <translation>طرز</translation>
+    </message>
+    <message>
+        <source>Item</source>
+        <translation>آئٹم</translation>
+    </message>
+    <message>
+        <source>Page</source>
+        <translation>صفحہ</translation>
+    </message>
+    <message>
+        <source>Layout</source>
+        <translation>ترتیب</translation>
+    </message>
+    <message>
+        <source>View</source>
+        <translation>منظر</translation>
+    </message>
+    <message>
+        <source>Utilities</source>
+        <translation>سہولیات</translation>
+    </message>
+    <message>
+        <source>Window</source>
+        <translation>دریچہ</translation>
+    </message>
+    <message>
+        <source>Help</source>
+        <translation>مدد</translation>
+    </message>
+</context>
+</TS>
