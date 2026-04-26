@@ -1,4 +1,3 @@
-# mypy: disable-error-code="call-arg, attr-defined, arg-type, no-any-return, call-overload"
 """Color-swatch editor dialog used by :mod:`msword.ui.palettes.colors`.
 
 Edits a single :class:`ColorSwatch` (or builds a new one) with a
@@ -238,7 +237,6 @@ class ColorEditor(QDialog):
         body = QHBoxLayout()
         outer.addLayout(body)
 
-        # left: form
         left = QWidget(self)
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
@@ -249,10 +247,6 @@ class ColorEditor(QDialog):
         form.addRow("Name:", self._name_edit)
 
         self._profile_picker = QComboBox()
-        # Populate from document's profile registry; if the doc has no
-        # CMYK / spot profiles registered we still expose the kinds so
-        # the user can build swatches of those kinds. The renderer will
-        # synthesise a default profile of the matching kind on save.
         self._populate_profile_picker()
         form.addRow("Profile:", self._profile_picker)
 
@@ -261,7 +255,6 @@ class ColorEditor(QDialog):
         self._spot_toggle.addItem("Spot color", userData=True)
         form.addRow("Separation:", self._spot_toggle)
 
-        # stacked component editors
         self._stack = QStackedWidget(self)
         self._srgb = _SrgbPanel(self._stack)
         self._cmyk = _CmykPanel(self._stack)
@@ -273,14 +266,12 @@ class ColorEditor(QDialog):
 
         body.addWidget(left, stretch=1)
 
-        # right: live preview
         self._preview = QFrame(self)
         self._preview.setFrameShape(QFrame.Shape.Box)
         self._preview.setMinimumSize(120, 120)
         self._preview.setAutoFillBackground(True)
         body.addWidget(self._preview, stretch=0)
 
-        # buttons
         self._buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
             | QDialogButtonBox.StandardButton.Cancel,
@@ -290,7 +281,6 @@ class ColorEditor(QDialog):
         self._buttons.rejected.connect(self.reject)
         outer.addWidget(self._buttons)
 
-        # signals — live preview + cross-panel sync
         self._profile_picker.currentIndexChanged.connect(self._on_profile_changed)
         self._spot_toggle.currentIndexChanged.connect(self._on_spot_toggle)
         for slider in (
@@ -309,7 +299,6 @@ class ColorEditor(QDialog):
             slider.valueChanged.connect(self._update_preview)
         self._spot.tint.valueChanged.connect(self._update_preview)
 
-        # seed initial state from the existing swatch if any
         self._initialise_from_existing()
         self._update_preview()
 
@@ -317,25 +306,16 @@ class ColorEditor(QDialog):
     # population / state seeding
     # ------------------------------------------------------------------
     def _populate_profile_picker(self) -> None:
-        # The model's profile registry may not have a CMYK or spot profile
-        # yet; we always offer the three kinds so swatch creation is not
-        # blocked. Ensure each shown profile has a unique label.
         seen: set[str] = set()
-        # Real profiles first
-        for prof in self._document.color_profiles.values():
+        for prof in self._document.color_profiles:
             self._profile_picker.addItem(f"{prof.name} ({prof.kind})", userData=prof.name)
             seen.add(prof.name)
-        # Synthetic placeholders so each kind is reachable.
         for synth in ("CMYK", "Spot"):
             if synth not in seen:
-                self._profile_picker.addItem(
-                    synth,
-                    userData=synth,
-                )
+                self._profile_picker.addItem(synth, userData=synth)
 
     def _initialise_from_existing(self) -> None:
         if self._existing_name is None:
-            # default: sRGB process, black
             idx = self._profile_picker.findData("sRGB")
             if idx >= 0:
                 self._profile_picker.setCurrentIndex(idx)
@@ -344,16 +324,16 @@ class ColorEditor(QDialog):
             self._srgb.set_components((0.0, 0.0, 0.0))
             return
 
-        swatch = self._document.color_swatches[self._existing_name]
+        swatch = self._document.find_color_swatch(self._existing_name)
+        if swatch is None:
+            raise KeyError(f"swatch {self._existing_name!r} not found")
         self._name_edit.setText(swatch.name)
         idx = self._profile_picker.findData(swatch.profile_name)
         if idx < 0:
-            # Profile not registered — add a row for it.
             self._profile_picker.addItem(swatch.profile_name, userData=swatch.profile_name)
             idx = self._profile_picker.count() - 1
         self._profile_picker.setCurrentIndex(idx)
         self._spot_toggle.setCurrentIndex(1 if swatch.is_spot else 0)
-        # Choose stack page from current toggle / profile
         self._sync_stack_page()
         if swatch.is_spot:
             self._spot.set_components(swatch.components)
@@ -385,7 +365,6 @@ class ColorEditor(QDialog):
     def _on_hex_edited(self) -> None:
         comps = _components_from_hex(self._srgb.hex_edit.text())
         if comps is None:
-            # restore from sliders
             r, g, b = self._srgb.components()
             self._srgb.hex_edit.setText(_hex_from_components(r, g, b))
             return
@@ -402,9 +381,9 @@ class ColorEditor(QDialog):
         resolved here. Falls back to substring inference for synthetic
         profile entries the document may not have registered yet.
         """
-        prof = self._document.color_profiles.get(profile_name)
+        prof = self._document.find_color_profile(profile_name)
         if prof is not None:
-            return prof.kind
+            return str(prof.kind)
         if "cmyk" in profile_name.lower():
             return _CMYK_KIND
         return _SRGB_KIND
@@ -456,7 +435,10 @@ class ColorEditor(QDialog):
             is_spot=is_spot,
         )
 
-        if name != self._existing_name and name in self._document.color_swatches:
+        if (
+            name != self._existing_name
+            and self._document.find_color_swatch(name) is not None
+        ):
             QMessageBox.warning(self, "Duplicate", f"Swatch {name!r} already exists.")
             return
         if self._existing_name is None:
