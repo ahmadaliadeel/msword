@@ -1,4 +1,3 @@
-# mypy: disable-error-code="call-arg, attr-defined, arg-type"
 """Colors palette — work unit #26.
 
 Dockable QuarkXPress-style palette listing the document's named colour
@@ -80,11 +79,9 @@ def _render_swatch_icon(swatch: ColorSwatch, *, size: QSize = _TILE_SIZE) -> QPi
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         r, g, b = swatch.to_rgb()
         painter.fillRect(pix.rect(), QColor.fromRgbF(r, g, b))
-        # 1-px black border so light swatches are still discernible
         painter.setPen(QColor(0, 0, 0))
         painter.drawRect(0, 0, size.width() - 1, size.height() - 1)
         if swatch.is_spot:
-            # mark spot swatches with a small dot in the corner
             painter.fillRect(2, 2, 4, 4, QColor(255, 255, 255))
             painter.setPen(QColor(0, 0, 0))
             painter.drawRect(2, 2, 4, 4)
@@ -178,7 +175,6 @@ class ColorsPalette(QDockWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # toolbar — New / Edit / Delete / Duplicate
         self._toolbar = QToolBar("Color swatch actions", container)
         self._toolbar.setIconSize(QSize(16, 16))
         style = self.style()
@@ -207,7 +203,6 @@ class ColorsPalette(QDockWidget):
         self._action_duplicate.triggered.connect(self._on_duplicate)
         layout.addWidget(self._toolbar)
 
-        # grid
         self._grid = _SwatchGrid(self)
         layout.addWidget(self._grid)
 
@@ -219,8 +214,9 @@ class ColorsPalette(QDockWidget):
     # ------------------------------------------------------------------
     def refresh(self) -> None:
         self._grid.clear()
-        for name in sorted(self._document.color_swatches):
-            swatch = self._document.color_swatches[name]
+        for swatch in sorted(
+            self._document.color_swatches, key=lambda s: s.name
+        ):
             item = QListWidgetItem(QIcon(_render_swatch_icon(swatch)), swatch.name)
             item.setSizeHint(QSize(_TILE_SIZE.width() + 16, _TILE_SIZE.height() + 24))
             item.setData(Qt.ItemDataRole.UserRole, swatch.name)
@@ -272,7 +268,7 @@ class ColorsPalette(QDockWidget):
         )
         if not ok or not new_name:
             return
-        if new_name in self._document.color_swatches:
+        if self._document.find_color_swatch(new_name) is not None:
             QMessageBox.warning(self, "Duplicate", f"{new_name!r} already exists.")
             return
         DuplicateColorSwatchCommand(self._document, name, new_name).redo()
@@ -285,10 +281,9 @@ class ColorsPalette(QDockWidget):
         name = item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(name, str):
             return
-        if self._document.selected_frame is None:
-            # No frame selected — clicking a swatch is a no-op (the user
-            # only selected a row in the palette). Real canvas wiring
-            # surfaces frame-selection state; we do not show an error.
+        selection = self._document.selection
+        frames = list(getattr(selection, "frames", []) or [])
+        if not frames and getattr(selection, "caret_frame", None) is None:
             return
         if shift:
             SetFrameStrokeCommand(self._document, name).redo()

@@ -70,6 +70,12 @@ __all__ = [
 from dataclasses import dataclass as _dataclass
 from dataclasses import field as _field
 from typing import Any as _Any
+from typing import cast as _cast
+
+from msword.model.color import ColorSwatch as _ColorSwatch
+from msword.model.document import Document as _ModelDocument
+from msword.model.frame import Fill as _Fill
+from msword.model.frame import Stroke as _Stroke
 
 
 @_dataclass
@@ -250,46 +256,144 @@ class ApplyCharacterStyleCommand(_UnitTwentyFiveStub):
 
 
 # Unit-26 colors-palette commands.
-@_dataclass
-class _UnitTwentySixStub:
-    pass
+class AddColorSwatchCommand(Command):
+    def __init__(self, doc: _ModelDocument, swatch: _ColorSwatch) -> None:
+        super().__init__(_cast(Document, doc), "Add Color Swatch")
+        self.swatch = swatch
+
+    def _do(self, doc: Document) -> None:
+        _cast(_ModelDocument, doc).color_swatches.append(self.swatch)
+
+    def _undo(self, doc: Document) -> None:
+        swatches = _cast(_ModelDocument, doc).color_swatches
+        for i, existing in enumerate(swatches):
+            if existing.name == self.swatch.name:
+                del swatches[i]
+                return
 
 
-@_dataclass
-class AddColorSwatchCommand(_UnitTwentySixStub):
-    name: str = ""
-    profile: str = "sRGB"
-    components: tuple[float, ...] = ()
-    is_spot: bool = False
+class EditColorSwatchCommand(Command):
+    def __init__(
+        self, doc: _ModelDocument, original_name: str, new_swatch: _ColorSwatch
+    ) -> None:
+        super().__init__(_cast(Document, doc), "Edit Color Swatch")
+        self.original_name = original_name
+        self.new_swatch = new_swatch
+        self._previous: _ColorSwatch | None = None
+        self._index: int = -1
+
+    def _do(self, doc: Document) -> None:
+        swatches = _cast(_ModelDocument, doc).color_swatches
+        for i, existing in enumerate(swatches):
+            if existing.name == self.original_name:
+                self._previous = existing
+                self._index = i
+                swatches[i] = self.new_swatch
+                return
+        raise KeyError(f"swatch {self.original_name!r} not found")
+
+    def _undo(self, doc: Document) -> None:
+        assert self._previous is not None and self._index >= 0
+        _cast(_ModelDocument, doc).color_swatches[self._index] = self._previous
 
 
-@_dataclass
-class EditColorSwatchCommand(_UnitTwentySixStub):
-    original_name: str = ""
-    new_name: str = ""
+class DeleteColorSwatchCommand(Command):
+    def __init__(self, doc: _ModelDocument, name: str) -> None:
+        super().__init__(_cast(Document, doc), "Delete Color Swatch")
+        self.name = name
+        self._removed: _ColorSwatch | None = None
+        self._index: int = -1
+
+    def _do(self, doc: Document) -> None:
+        swatches = _cast(_ModelDocument, doc).color_swatches
+        for i, existing in enumerate(swatches):
+            if existing.name == self.name:
+                self._removed = existing
+                self._index = i
+                del swatches[i]
+                return
+        raise KeyError(f"swatch {self.name!r} not found")
+
+    def _undo(self, doc: Document) -> None:
+        assert self._removed is not None and self._index >= 0
+        _cast(_ModelDocument, doc).color_swatches.insert(self._index, self._removed)
 
 
-@_dataclass
-class DeleteColorSwatchCommand(_UnitTwentySixStub):
-    name: str = ""
+class DuplicateColorSwatchCommand(Command):
+    def __init__(self, doc: _ModelDocument, source_name: str, new_name: str) -> None:
+        super().__init__(_cast(Document, doc), "Duplicate Color Swatch")
+        self.source_name = source_name
+        self.new_name = new_name
+
+    def _do(self, doc: Document) -> None:
+        model_doc = _cast(_ModelDocument, doc)
+        source = model_doc.find_color_swatch(self.source_name)
+        if source is None:
+            raise KeyError(f"swatch {self.source_name!r} not found")
+        copy = _ColorSwatch(
+            name=self.new_name,
+            profile_name=source.profile_name,
+            components=source.components,
+            is_spot=source.is_spot,
+        )
+        model_doc.color_swatches.append(copy)
+
+    def _undo(self, doc: Document) -> None:
+        swatches = _cast(_ModelDocument, doc).color_swatches
+        for i, existing in enumerate(swatches):
+            if existing.name == self.new_name:
+                del swatches[i]
+                return
 
 
-@_dataclass
-class DuplicateColorSwatchCommand(_UnitTwentySixStub):
-    source_name: str = ""
-    new_name: str = ""
+def _selected_frame(doc: _ModelDocument) -> _Any:
+    selection = doc.selection
+    frames = getattr(selection, "frames", None) or []
+    if len(frames) == 1:
+        return frames[0]
+    return getattr(selection, "caret_frame", None)
 
 
-@_dataclass
-class SetFrameFillCommand(_UnitTwentySixStub):
-    frame_id: str = ""
-    swatch_name: str = ""
+class SetFrameFillCommand(Command):
+    def __init__(self, doc: _ModelDocument, swatch_name: str) -> None:
+        super().__init__(_cast(Document, doc), "Set Frame Fill")
+        self.swatch_name = swatch_name
+        self._frame: _Any = None
+        self._previous: _Fill | None = None
+
+    def _do(self, doc: Document) -> None:
+        frame = _selected_frame(_cast(_ModelDocument, doc))
+        if frame is None:
+            return
+        self._frame = frame
+        self._previous = getattr(frame, "fill", None)
+        frame.fill = _Fill(color_ref=self.swatch_name)
+
+    def _undo(self, doc: Document) -> None:
+        if self._frame is None:
+            return
+        self._frame.fill = self._previous
 
 
-@_dataclass
-class SetFrameStrokeCommand(_UnitTwentySixStub):
-    frame_id: str = ""
-    swatch_name: str = ""
+class SetFrameStrokeCommand(Command):
+    def __init__(self, doc: _ModelDocument, swatch_name: str) -> None:
+        super().__init__(_cast(Document, doc), "Set Frame Stroke")
+        self.swatch_name = swatch_name
+        self._frame: _Any = None
+        self._previous: _Stroke | None = None
+
+    def _do(self, doc: Document) -> None:
+        frame = _selected_frame(_cast(_ModelDocument, doc))
+        if frame is None:
+            return
+        self._frame = frame
+        self._previous = getattr(frame, "stroke", None)
+        frame.stroke = _Stroke(color_ref=self.swatch_name)
+
+    def _undo(self, doc: Document) -> None:
+        if self._frame is None:
+            return
+        self._frame.stroke = self._previous
 
 
 # Unit-29 block-editor-menus commands (slash + bubble menus).

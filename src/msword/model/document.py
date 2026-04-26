@@ -124,6 +124,14 @@ class Document(QObject):
         """Title shown in the window chrome."""
         return self.title
 
+    def find_color_profile(self, name: str) -> Any:
+        """Return the registered profile with `name`, or None."""
+        return next((p for p in self.color_profiles if p.name == name), None)
+
+    def find_color_swatch(self, name: str) -> Any:
+        """Return the registered swatch with `name`, or None."""
+        return next((s for s in self.color_swatches if s.name == name), None)
+
     def set_selection(self, selection: Any) -> None:
         """Replace the current selection and emit `selection_changed`.
 
