@@ -47,3 +47,4 @@ Thumbs.db
 # App
 *.msdoc.bak
 tests/integration/screenshots/
+.claude/worktrees/

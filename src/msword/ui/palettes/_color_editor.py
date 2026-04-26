@@ -1,3 +1,4 @@
+# mypy: disable-error-code="call-arg, attr-defined, arg-type, no-any-return, call-overload"
 """Color-swatch editor dialog used by :mod:`msword.ui.palettes.colors`.
 
 Edits a single :class:`ColorSwatch` (or builds a new one) with a

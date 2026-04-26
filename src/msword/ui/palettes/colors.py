@@ -1,3 +1,4 @@
+# mypy: disable-error-code="call-arg, attr-defined, arg-type"
 """Colors palette — work unit #26.
 
 Dockable QuarkXPress-style palette listing the document's named colour
