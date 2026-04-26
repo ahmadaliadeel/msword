@@ -94,13 +94,12 @@ from dataclasses import dataclass as _dataclass
 from typing import Any as _Any
 from typing import cast as _cast
 
+from PySide6.QtGui import QUndoCommand as _QUndoCommand
+
 from msword.model.color import ColorSwatch as _ColorSwatch
 from msword.model.document import Document as _ModelDocument
 from msword.model.frame import Fill as _Fill
 from msword.model.frame import Stroke as _Stroke
-
-from PySide6.QtGui import QUndoCommand as _QUndoCommand
-
 from msword.model.run import Run as _Run
 
 
@@ -504,15 +503,38 @@ class SetRunColorCommand(_RunMarkCommand):
 
 
 # Unit-31 find-replace command.
-@_dataclass
-class _UnitThirtyOneStub:
-    pass
+class ReplaceTextInRunCommand(Command):
+    """Replace `block.runs[run_index].text[char_start:char_end]` with `replacement`.
 
+    `Run` is a frozen dataclass — instead of mutating the run in place we
+    swap `block.runs[run_index]` for a new run produced by `with_text`,
+    which preserves all inline marks. `_undo` restores the original run.
+    """
 
-@_dataclass
-class ReplaceTextInRunCommand(_UnitThirtyOneStub):
-    run: _Any = None
-    char_start: int = 0
-    char_end: int = 0
-    replacement: str = ""
-    text: str = "Replace text"
+    def __init__(
+        self,
+        doc: Document,
+        block: _Any,
+        run_index: int,
+        char_start: int,
+        char_end: int,
+        replacement: str,
+        text: str = "Replace text",
+    ) -> None:
+        super().__init__(doc, text)
+        self._block = block
+        self._run_index = run_index
+        self._char_start = char_start
+        self._char_end = char_end
+        self._replacement = replacement
+        self._original_run: _Any = None
+
+    def _do(self, doc: Document) -> None:
+        runs = self._block.runs
+        run = runs[self._run_index]
+        self._original_run = run
+        new_text = run.text[: self._char_start] + self._replacement + run.text[self._char_end :]
+        runs[self._run_index] = run.with_text(new_text)
+
+    def _undo(self, doc: Document) -> None:
+        self._block.runs[self._run_index] = self._original_run

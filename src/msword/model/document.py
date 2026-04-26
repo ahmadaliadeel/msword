@@ -200,6 +200,15 @@ class Document(QObject):
         """Return the character style named `name`, or `None` if absent."""
         return next((s for s in self.character_styles if s.name == name), None)
 
+    # ----- stories ---------------------------------------------------------
+
+    def find_story(self, story_id: str) -> Any | None:
+        """Return the story whose `id` matches `story_id`, else `None`."""
+        for story in self.stories:
+            if getattr(story, "id", None) == story_id:
+                return story
+        return None
+
     # ----- master pages ----------------------------------------------------
 
     def add_master_page(self, master: MasterPage) -> None:

@@ -4,35 +4,23 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from msword.commands import MacroCommand
 from msword.feat.find_engine import Match
-from msword.model.block import Block
+from msword.model.blocks import ParagraphBlock
 from msword.model.document import Document
 from msword.model.run import Run
 from msword.model.story import Story
 from msword.ui.find_replace import FindReplaceDialog
 
-pytestmark = pytest.mark.xfail(
-    reason=(
-        "unit-31 find-replace dialog targets stub Document/Block/Story/Run "
-        "constructors and a `MacroCommand(text=...)` shape that diverge from "
-        "master's unit-2/5/4/9 model + commands. Reconciliation tracked "
-        "outside this merge."
-    ),
-    strict=False,
-)
-
 
 def _doc(*paragraphs: str) -> Document:
-    return Document(
-        stories=[
-            Story(
-                blocks=[Block(kind="paragraph", runs=[Run(text=p)]) for p in paragraphs]
-            )
-        ]
-    )
+    doc = Document()
+    blocks = [
+        ParagraphBlock(id=f"p{i}", runs=[Run(text=p)])
+        for i, p in enumerate(paragraphs)
+    ]
+    doc.stories.append(Story(id="s1", blocks=blocks))
+    return doc
 
 
 def test_dialog_constructs(qtbot: Any) -> None:

@@ -1,4 +1,3 @@
-# mypy: disable-error-code="attr-defined, call-arg, arg-type, no-any-return"
 """Pure find/replace engine — Bidi-aware, logical-order, NFC-normalized.
 
 Per spec §12 unit 31: the engine is a pure function over `Document`. It
@@ -17,11 +16,12 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal, cast
 
 from msword.commands import Command, MacroCommand, ReplaceTextInRunCommand
-from msword.model.block import Block
+from msword.commands.base import Document as CommandDocument
 from msword.model.document import Document
 from msword.model.run import Run
 
@@ -87,7 +87,43 @@ class _RunSpan:
     run: Run
 
 
-def _block_runs_with_spans(block: Block) -> tuple[str, list[_RunSpan]]:
+def _iter_text_blocks(blocks: list[Any]) -> Iterator[Any]:
+    """Walk a block tree yielding only blocks that own a `runs: list[Run]`.
+
+    Recurses into container blocks (callouts, quotes, lists, tables) so
+    text inside them is searchable. Blocks without a runs list (dividers,
+    images, code, embeds) are skipped — code blocks store text as a
+    single `str`, not as runs, and replacing into them would require a
+    different mutation shape.
+    """
+    for block in blocks:
+        runs = getattr(block, "runs", None)
+        if isinstance(runs, list):
+            yield block
+            continue
+        # Container shapes: CalloutBlock / QuoteBlock have `blocks: list[Block]`.
+        nested = getattr(block, "blocks", None)
+        if isinstance(nested, list):
+            yield from _iter_text_blocks(nested)
+            continue
+        # ListBlock has `items: list[ListItem]`, each with `blocks`.
+        items = getattr(block, "items", None)
+        if isinstance(items, list):
+            for item in items:
+                item_blocks = getattr(item, "blocks", None)
+                if isinstance(item_blocks, list):
+                    yield from _iter_text_blocks(item_blocks)
+            continue
+        # TableBlock cells live in `cells: dict[(r, c), BlockCell]`.
+        cells = getattr(block, "cells", None)
+        if isinstance(cells, dict):
+            for cell in cells.values():
+                cell_blocks = getattr(cell, "blocks", None)
+                if isinstance(cell_blocks, list):
+                    yield from _iter_text_blocks(cell_blocks)
+
+
+def _block_runs_with_spans(block: Any) -> tuple[str, list[_RunSpan]]:
     """Concatenate `block.runs` text (NFC) and record each run's span.
 
     Logical order matters — runs are already stored in logical order by the
@@ -164,7 +200,7 @@ def find_all(
 
     results: list[Match] = []
     for story in stories:
-        for block in story.iter_leaf_blocks():
+        for block in _iter_text_blocks(story.blocks):
             text, spans = _block_runs_with_spans(block)
             if not text or not spans:
                 continue
@@ -209,9 +245,8 @@ def replace_all(
     The caller is responsible for pushing the returned `MacroCommand` onto
     the undo stack — the engine does not mutate `doc` directly.
     """
-    macro = MacroCommand(text=f"Replace {len(matches)} match(es)")
-    if not matches:
-        return macro
+    cdoc = cast(CommandDocument, doc)
+    children: list[Command] = []
 
     # Group matches by (story_id, block_id) so we can apply per-block from
     # the *end* — that way earlier offsets don't shift under our feet.
@@ -223,27 +258,27 @@ def replace_all(
         story = doc.find_story(story_id)
         if story is None:
             continue
-        block = _find_block(story.blocks, block_id)
+        block = _find_text_block(story.blocks, block_id)
         if block is None:
             continue
         # Apply right-to-left within the block so prior offsets stay valid.
         block_matches.sort(key=lambda m: (m.run_index, m.char_start), reverse=True)
         for match in block_matches:
-            macro.children.extend(_commands_for_match(block, match, replacement))
+            children.extend(_commands_for_match(cdoc, block, match, replacement))
 
-    return macro
+    return MacroCommand(cdoc, children, text=f"Replace {len(matches)} match(es)")
 
 
-def _find_block(blocks: list[Block], block_id: str) -> Block | None:
-    for block in blocks:
-        for leaf in block.iter_leaf_blocks():
-            if leaf.id == block_id:
-                return leaf
+def _find_text_block(blocks: list[Any], block_id: str) -> Any | None:
+    """Locate the text-bearing block whose `id == block_id` anywhere in the tree."""
+    for block in _iter_text_blocks(blocks):
+        if block.id == block_id:
+            return block
     return None
 
 
 def _commands_for_match(
-    block: Block, match: Match, replacement: str
+    doc: CommandDocument, block: Any, match: Match, replacement: str
 ) -> list[Command]:
     """Translate a Match into per-run ReplaceTextInRunCommands.
 
@@ -256,13 +291,14 @@ def _commands_for_match(
     cmds: list[Command] = []
     if match.run_index >= len(block.runs):
         return cmds
-    first_run = block.runs[match.run_index]
     cmds.append(
         ReplaceTextInRunCommand(
-            run=first_run,
-            char_start=match.char_start,
-            char_end=match.char_end,
-            replacement=replacement,
+            doc,
+            block,
+            match.run_index,
+            match.char_start,
+            match.char_end,
+            replacement,
         )
     )
     # Process extras in reverse so deletions don't shift earlier extras.
@@ -271,10 +307,12 @@ def _commands_for_match(
             continue
         cmds.append(
             ReplaceTextInRunCommand(
-                run=block.runs[run_index],
-                char_start=lo,
-                char_end=hi,
-                replacement="",
+                doc,
+                block,
+                run_index,
+                lo,
+                hi,
+                "",
             )
         )
     return cmds
