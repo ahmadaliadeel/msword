@@ -68,6 +68,8 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 from dataclasses import dataclass as _dataclass
+from dataclasses import field as _field
+from typing import Any as _Any
 
 
 @_dataclass
@@ -288,3 +290,35 @@ class SetFrameFillCommand(_UnitTwentySixStub):
 class SetFrameStrokeCommand(_UnitTwentySixStub):
     frame_id: str = ""
     swatch_name: str = ""
+
+
+# Unit-29 block-editor-menus commands (slash + bubble menus).
+@_dataclass
+class _UnitTwentyNineStub:
+    pass
+
+
+@_dataclass
+class TransformBlockCommand(_UnitTwentyNineStub):
+    kind: str = "paragraph"
+    params: dict[str, _Any] = _field(default_factory=dict)
+    name: str = "transform-block"
+
+
+@_dataclass
+class ToggleMarkCommand(_UnitTwentyNineStub):
+    mark: str = "bold"
+    name: str = "toggle-mark"
+
+
+@_dataclass
+class SetLinkCommand(_UnitTwentyNineStub):
+    url: str = ""
+    name: str = "set-link"
+
+
+@_dataclass
+class SetRunColorCommand(_UnitTwentyNineStub):
+    color: str = ""
+    role: str = "color"
+    name: str = "set-run-color"
