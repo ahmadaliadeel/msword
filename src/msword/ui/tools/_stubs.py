@@ -98,7 +98,13 @@ class StubCanvas:
 
     def __init__(self) -> None:
         self.document: Any = Document()
-        page = Page()
+        try:
+            page = Page()
+        except TypeError:
+            # Master's Page requires an id; the stub-Page used pre-merge had
+            # no required args. Generate a simple unique id when needed.
+            import uuid
+            page = Page(id=f"p-{uuid.uuid4().hex[:8]}")
         self.document.pages.append(page)
         self.current_page: Any = page
         self.active_tool: Tool | None = None
@@ -132,7 +138,11 @@ def _resolve(module_path: str, name: str, fallback: Any) -> Any:
     return getattr(module, name, fallback)
 
 
-AddFrameCommand: Any = _resolve("msword.commands", "AddFrameCommand", _StubAddFrameCommand)
+# Always use the local stub AddFrameCommand here. The real one (unit-9) has
+# signature (doc, page_id, frame) — unit-20's tools build (doc, page, rect, kind,
+# **extra) and adapting requires a per-tool Frame factory, deferred to a follow-up
+# unit that wires the real command in.
+AddFrameCommand: Any = _StubAddFrameCommand
 Document: Any = _resolve("msword.model", "Document", _StubDocument)
 Page: Any = _resolve("msword.model", "Page", _StubPage)
 Frame: Any = _resolve("msword.model", "Frame", _StubFrame)
