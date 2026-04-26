@@ -67,9 +67,13 @@ __all__ = [
 # without depending on a sibling unit landing first.
 # ---------------------------------------------------------------------------
 
+import dataclasses as _dataclasses
 from dataclasses import dataclass as _dataclass
-from dataclasses import field as _field
 from typing import Any as _Any
+
+from PySide6.QtGui import QUndoCommand as _QUndoCommand
+
+from msword.model.run import Run as _Run
 
 
 @_dataclass
@@ -293,35 +297,148 @@ class SetFrameStrokeCommand(_UnitTwentySixStub):
 
 
 # Unit-29 block-editor-menus commands (slash + bubble menus).
-@_dataclass
-class _UnitTwentyNineStub:
-    pass
+def _find_run_location(doc: _Any, run: _Any) -> tuple[_Any, int] | None:
+    for story in getattr(doc, "stories", []):
+        for block in getattr(story, "blocks", []):
+            runs = getattr(block, "runs", None)
+            if runs is None:
+                continue
+            for i, r in enumerate(runs):
+                if r is run:
+                    return block, i
+    return None
 
 
-@_dataclass
-class TransformBlockCommand(_UnitTwentyNineStub):
-    kind: str = "paragraph"
-    params: dict[str, _Any] = _field(default_factory=dict)
-    name: str = "transform-block"
+def _replace_run(doc: _Any, block: _Any, index: int, new_run: _Run) -> None:
+    block.runs[index] = new_run
+    selection = getattr(doc, "selection", None)
+    if selection is not None:
+        selection.caret_run = new_run
 
 
-@_dataclass
-class ToggleMarkCommand(_UnitTwentyNineStub):
-    mark: str = "bold"
-    name: str = "toggle-mark"
+class TransformBlockCommand(Command):
+    """Replace the caret block with one of ``kind`` (resolved via :class:`BlockRegistry`)."""
+
+    def __init__(
+        self,
+        doc: Document | None = None,
+        *,
+        kind: str = "paragraph",
+        params: dict[str, _Any] | None = None,
+    ) -> None:
+        _QUndoCommand.__init__(self, "Transform Block")
+        self._doc = doc  # type: ignore[assignment]
+        self.kind = kind
+        self.params: dict[str, _Any] = dict(params) if params else {}
+        self._story: _Any = None
+        self._index: int | None = None
+        self._old_block: _Any = None
+
+    def _do(self, doc: Document) -> None:
+        from msword.model.block import BlockRegistry
+
+        selection = getattr(doc, "selection", None)
+        caret_run = getattr(selection, "caret_run", None) if selection else None
+        if caret_run is None:
+            return
+        located = _find_run_location(doc, caret_run)
+        if located is None:
+            return
+        target_block, _ = located
+        block_id = getattr(target_block, "id", None)
+        if block_id is None:
+            return
+        for story in getattr(doc, "stories", []):
+            for idx, block in enumerate(getattr(story, "blocks", [])):
+                if getattr(block, "id", None) != block_id:
+                    continue
+                self._story = story
+                self._index = idx
+                self._old_block = block
+                payload: dict[str, _Any] = {"kind": self.kind, "id": block_id, **self.params}
+                story.blocks[idx] = BlockRegistry.resolve(payload)
+                return
+
+    def _undo(self, doc: Document) -> None:
+        if self._story is None or self._index is None or self._old_block is None:
+            return
+        self._story.blocks[self._index] = self._old_block
 
 
-@_dataclass
-class SetLinkCommand(_UnitTwentyNineStub):
-    url: str = ""
-    name: str = "set-link"
+class _RunMarkCommand(Command):
+    """Locate caret run, replace with ``_apply(run)`` on redo, restore on undo."""
+
+    def __init__(self, doc: Document | None, label: str) -> None:
+        _QUndoCommand.__init__(self, label)
+        self._doc = doc  # type: ignore[assignment]
+        self._block: _Any = None
+        self._index: int | None = None
+        self._prev_run: _Run | None = None
+
+    def _apply(self, run: _Run) -> _Run:
+        raise NotImplementedError
+
+    def _do(self, doc: Document) -> None:
+        selection = getattr(doc, "selection", None)
+        caret_run = getattr(selection, "caret_run", None) if selection else None
+        if not isinstance(caret_run, _Run):
+            return
+        located = _find_run_location(doc, caret_run)
+        if located is None:
+            return
+        block, index = located
+        self._block = block
+        self._index = index
+        self._prev_run = caret_run
+        _replace_run(doc, block, index, self._apply(caret_run))
+
+    def _undo(self, doc: Document) -> None:
+        if self._block is None or self._index is None or self._prev_run is None:
+            return
+        _replace_run(doc, self._block, self._index, self._prev_run)
 
 
-@_dataclass
-class SetRunColorCommand(_UnitTwentyNineStub):
-    color: str = ""
-    role: str = "color"
-    name: str = "set-run-color"
+class ToggleMarkCommand(_RunMarkCommand):
+    """Toggle a boolean inline mark (``bold``/``italic``/``underline``/``strike``/``code``)."""
+
+    def __init__(self, doc: Document | None = None, *, mark: str = "bold") -> None:
+        super().__init__(doc, "Toggle Mark")
+        self.mark = mark
+
+    def _apply(self, run: _Run) -> _Run:
+        kwargs: dict[str, _Any] = {self.mark: not getattr(run, self.mark)}
+        return _dataclasses.replace(run, **kwargs)
+
+
+class SetLinkCommand(_RunMarkCommand):
+    """Set (or clear, with empty ``url``) the ``link`` mark on the caret run."""
+
+    def __init__(self, doc: Document | None = None, *, url: str = "") -> None:
+        super().__init__(doc, "Set Link")
+        self.url = url
+
+    def _apply(self, run: _Run) -> _Run:
+        return _dataclasses.replace(run, link=self.url or None)
+
+
+class SetRunColorCommand(_RunMarkCommand):
+    """Set ``color_ref`` (role ``"color"``) or ``highlight_ref`` (role ``"highlight"``)."""
+
+    def __init__(
+        self,
+        doc: Document | None = None,
+        *,
+        color: str = "",
+        role: str = "color",
+    ) -> None:
+        super().__init__(doc, "Set Run Color")
+        self.color = color
+        self.role = role
+
+    def _apply(self, run: _Run) -> _Run:
+        field_name = "highlight_ref" if self.role == "highlight" else "color_ref"
+        kwargs: dict[str, _Any] = {field_name: self.color or None}
+        return _dataclasses.replace(run, **kwargs)
 
 
 # Unit-31 find-replace command.
