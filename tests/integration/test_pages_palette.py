@@ -119,9 +119,10 @@ def test_thumbnail_renderer_default_paints_white_with_number(qtbot) -> None:  # 
     assert not pix.isNull()
     assert pix.size() == QSize(48, 64)
     img = pix.toImage()
-    # corner pixel should be white (border may be dark, so probe the middle).
-    mid = img.pixelColor(img.width() // 2, img.height() // 2)
-    assert mid.red() == 255 and mid.green() == 255 and mid.blue() == 255
+    # Probe an interior pixel inside the white page area but offset from
+    # the centred page-number glyph (which sits at width/2, height/2).
+    sample = img.pixelColor(img.width() // 4, img.height() // 4)
+    assert sample.red() == 255 and sample.green() == 255 and sample.blue() == 255
 
 
 def test_dock_factory_has_two_tabs(qtbot) -> None:  # type: ignore[no-untyped-def]

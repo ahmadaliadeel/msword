@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QDockWidget, QTabWidget, QWidget
 
 from ._stubs import CommandBus, Document
 from .outline import OutlinePalette
-from .pages import PageThumbnailRenderer, PagesPalette
+from .pages import PagesPalette, PageThumbnailRenderer
 
 
 class PagesOutlineDock(QDockWidget):

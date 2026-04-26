@@ -10,7 +10,7 @@ Thumbnails regenerate on ``Document.page_changed`` (debounced 200 ms).
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, Protocol
 
 from PySide6.QtCore import (
@@ -136,9 +136,7 @@ class _PagesModel(QAbstractListModel):
     def mimeTypes(self) -> list[str]:
         return ["application/x-msword-pageindex"]
 
-    def mimeData(
-        self, indexes: list[QModelIndex] | list[QPersistentModelIndex]
-    ) -> QMimeData:
+    def mimeData(self, indexes: Sequence[QModelIndex]) -> QMimeData:
         mime = QMimeData()
         rows = sorted({i.row() for i in indexes if i.isValid()})
         if rows:

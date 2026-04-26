@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from ._dock import PagesOutlineDock, make_pages_outline_dock
 from .outline import OutlinePalette
-from .pages import PageThumbnailRenderer, PagesPalette
+from .pages import PagesPalette, PageThumbnailRenderer
 
 __all__ = [
     "OutlinePalette",
