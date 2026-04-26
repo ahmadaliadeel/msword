@@ -16,10 +16,9 @@ increments coalesce into a single undoable step. Discrete toggles (Bold,
 Italic, OpenType features, baseline grid, …) push immediately.
 """
 
-# mypy: disable-error-code="call-arg, attr-defined"
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, cast
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction, QFont
@@ -65,7 +64,9 @@ from msword.commands import (
     SetZoomCommand,
     SkewFrameCommand,
 )
+from msword.commands import Document as _CommandsDocument
 from msword.model.frame import Frame, TextFrame
+from msword.model.selection import Selection
 
 if TYPE_CHECKING:
     from msword.model.document import Document
@@ -126,12 +127,8 @@ class MeasurementsPalette(QWidget):
         outer.addWidget(self._stack)
         outer.addStretch(1)
 
-        # Subscribe to selection / caret events when the document exposes them
-        # (units 2-9 may not have wired these signals yet on master).
-        for sig_name in ("selection_changed", "caret_changed"):
-            sig = getattr(document, sig_name, None)
-            if sig is not None and hasattr(sig, "connect"):
-                sig.connect(self._refresh)
+        document.selection_changed.connect(self._refresh)
+        document.caret_changed.connect(self._refresh)
         self._refresh()
 
     # ------------------------------------------------------------------ build
@@ -272,7 +269,6 @@ class MeasurementsPalette(QWidget):
         row.addWidget(self.strike_btn)
 
         self.paragraph_style_combo = QComboBox(page)
-        # paragraph_styles may be a dict (unit-8) or a list of styles (master).
         styles = self._document.paragraph_styles
         if isinstance(styles, dict):
             self.paragraph_style_combo.addItems(list(styles.keys()))
@@ -355,11 +351,7 @@ class MeasurementsPalette(QWidget):
         return self._stack.currentIndex()
 
     def _refresh(self) -> None:
-        # Defensive: master's Document doesn't carry .selection yet (unit-22 +
-        # downstream wiring will). Treat absent selection as empty.
-        from msword.model.selection import Selection
-
-        sel = getattr(self._document, "selection", None) or Selection()
+        sel = self._document.selection
         if sel.has_caret:
             self._stack.setCurrentIndex(_MODE_TEXT)
             self._populate_text_mode()
@@ -391,16 +383,18 @@ class MeasurementsPalette(QWidget):
     def _populate_geometry_mode(self, frame: Frame) -> None:
         with self._suspended():
             for spin, value in (
-                (self.x_spin, frame.x),
-                (self.y_spin, frame.y),
-                (self.w_spin, frame.w),
-                (self.h_spin, frame.h),
-                (self.rotation_spin, frame.rotation),
-                (self.skew_spin, frame.skew),
+                (self.x_spin, frame.x_pt),
+                (self.y_spin, frame.y_pt),
+                (self.w_spin, frame.w_pt),
+                (self.h_spin, frame.h_pt),
+                (self.rotation_spin, frame.rotation_deg),
+                (self.skew_spin, frame.skew_deg),
             ):
                 spin.setSpecialValueText("")
                 spin.setValue(value)
-            self.aspect_lock.setChecked(frame.aspect_locked)
+            self.aspect_lock.setChecked(
+                bool(self._document.aspect_locks.get(frame.id, False))
+            )
 
     def _populate_geometry_mode_mixed(self) -> None:
         with self._suspended():
@@ -421,27 +415,38 @@ class MeasurementsPalette(QWidget):
         if run is None:
             return
         with self._suspended():
-            self.font_combo.setCurrentFont(QFont(run.font_family))
-            self.size_spin.setValue(run.size)
-            self.leading_spin.setValue(run.leading)
+            self.font_combo.setCurrentFont(QFont(run.font_ref or ""))
+            self.size_spin.setValue(run.size_pt or 0.0)
+            # Leading + alignment are paragraph-level; pick up the document's
+            # active paragraph style if available.
+            style = None
+            active = getattr(self._document, "active_paragraph_style", None)
+            if active:
+                style = self._document.find_paragraph_style(active)
+            self.leading_spin.setValue(getattr(style, "leading_pt", 0.0) or 0.0)
             self.tracking_spin.setValue(run.tracking)
             for btn in self.alignment_group.buttons():
-                btn.setChecked(btn.property("alignment_token") == run.alignment)
+                btn.setChecked(
+                    getattr(style, "alignment", None) == btn.property("alignment_token")
+                )
             self.bold_btn.setChecked(run.bold)
             self.italic_btn.setChecked(run.italic)
             self.underline_btn.setChecked(run.underline)
             self.strike_btn.setChecked(run.strike)
-            idx = self.paragraph_style_combo.findText(run.paragraph_style_ref)
-            if idx >= 0:
-                self.paragraph_style_combo.setCurrentIndex(idx)
+            if active:
+                idx = self.paragraph_style_combo.findText(active)
+                if idx >= 0:
+                    self.paragraph_style_combo.setCurrentIndex(idx)
             for tag, action in self._opentype_actions.items():
                 action.setChecked(tag in run.opentype_features)
 
     def _populate_columns_mode(self, frame: TextFrame) -> None:
         with self._suspended():
             self.columns_spin.setValue(frame.columns)
-            self.gutter_spin.setValue(frame.gutter)
-            self.baseline_grid_check.setChecked(frame.baseline_grid)
+            self.gutter_spin.setValue(frame.gutter_pt)
+            self.baseline_grid_check.setChecked(
+                bool(self._document.baseline_grid_overrides.get(frame.id, False))
+            )
             idx = self.vertical_align_combo.findText(frame.vertical_align)
             if idx >= 0:
                 self.vertical_align_combo.setCurrentIndex(idx)
@@ -451,12 +456,12 @@ class MeasurementsPalette(QWidget):
     def _on_zoom_changed(self, value: float) -> None:
         if self._suspend_signals:
             return
-        self._schedule(SetZoomCommand(zoom=value / 100.0))
+        self._schedule(SetZoomCommand(self._document, zoom=value / 100.0))
 
     def _on_view_mode_changed(self, mode: str) -> None:
         if self._suspend_signals or not mode:
             return
-        self._schedule(SetViewModeCommand(view_mode=mode))
+        self._schedule(SetViewModeCommand(self._document, view_mode=mode))
 
     # ------------------------------------------------------------------ slots — geometry
 
@@ -464,72 +469,85 @@ class MeasurementsPalette(QWidget):
         """Single frame currently being edited, or `None` if signals should be ignored."""
         if self._suspend_signals:
             return None
-        frame: Frame | None = self._document.selection.single_frame
-        return frame
+        sel: Selection = self._document.selection
+        return sel.single_frame
 
     def _on_x_changed(self, value: float) -> None:
         f = self._selected_frame()
         if f is None:
             return
-        self._schedule(MoveFrameCommand(frame_id=f.id, x=value, y=f.y))
+        self._schedule(
+            MoveFrameCommand(self._cmd_doc, f.page_id, f.id, dx=value - f.x_pt, dy=0.0)
+        )
 
     def _on_y_changed(self, value: float) -> None:
         f = self._selected_frame()
         if f is None:
             return
-        self._schedule(MoveFrameCommand(frame_id=f.id, x=f.x, y=value))
+        self._schedule(
+            MoveFrameCommand(self._cmd_doc, f.page_id, f.id, dx=0.0, dy=value - f.y_pt)
+        )
 
     def _on_w_changed(self, value: float) -> None:
         f = self._selected_frame()
         if f is None:
             return
-        self._schedule(ResizeFrameCommand(frame_id=f.id, w=value, h=f.h))
+        self._schedule(
+            ResizeFrameCommand(self._cmd_doc, f.page_id, f.id, new_w=value, new_h=f.h_pt)
+        )
 
     def _on_h_changed(self, value: float) -> None:
         f = self._selected_frame()
         if f is None:
             return
-        self._schedule(ResizeFrameCommand(frame_id=f.id, w=f.w, h=value))
+        self._schedule(
+            ResizeFrameCommand(self._cmd_doc, f.page_id, f.id, new_w=f.w_pt, new_h=value)
+        )
+
+    @property
+    def _cmd_doc(self) -> _CommandsDocument:
+        """Cast view of the document that satisfies the commands.Document protocol."""
+        return cast(_CommandsDocument, self._document)
 
     def _on_rotation_changed(self, value: float) -> None:
         f = self._selected_frame()
         if f is None:
             return
-        self._schedule(RotateFrameCommand(frame_id=f.id, rotation=value))
+        self._schedule(RotateFrameCommand(self._document, frame_id=f.id, rotation=value))
 
     def _on_skew_changed(self, value: float) -> None:
         f = self._selected_frame()
         if f is None:
             return
-        self._schedule(SkewFrameCommand(frame_id=f.id, skew=value))
+        self._schedule(SkewFrameCommand(self._document, frame_id=f.id, skew=value))
 
     def _on_aspect_lock_toggled(self, checked: bool) -> None:
         f = self._selected_frame()
         if f is None:
             return
-        self._schedule(SetAspectLockCommand(frame_id=f.id, locked=checked))
+        self._schedule(SetAspectLockCommand(self._document, frame_id=f.id, locked=checked))
 
     # ------------------------------------------------------------------ slots — text
 
     def _on_font_changed(self, font: QFont) -> None:
         if self._suspend_signals:
             return
-        self._schedule(SetFontCommand(family=font.family()))
+        self._schedule(SetFontCommand(self._document, family=font.family()))
 
     def _on_size_changed(self, value: float) -> None:
         if self._suspend_signals:
             return
-        self._schedule(SetSizeCommand(size=value))
+        self._schedule(SetSizeCommand(self._document, size=value))
 
     def _on_leading_changed(self, value: float) -> None:
         if self._suspend_signals:
             return
-        self._schedule(SetLeadingCommand(leading=value))
+        self._schedule(SetLeadingCommand(self._document, leading=value))
 
     def _on_tracking_changed(self, value: float) -> None:
         if self._suspend_signals:
             return
-        self._schedule(SetTrackingCommand(tracking=value))
+        self._schedule(SetTrackingCommand(self._document, tracking=value))
 
     def _on_alignment_toggled(self, button: QAbstractButton, checked: bool) -> None:
         if self._suspend_signals or not checked:
@@ -537,37 +555,39 @@ class MeasurementsPalette(QWidget):
         token = button.property("alignment_token")
         if not isinstance(token, str):
             return
-        self._schedule(SetAlignmentCommand(alignment=token))
+        self._schedule(SetAlignmentCommand(self._document, alignment=token))
 
     def _on_bold_toggled(self, checked: bool) -> None:
         if self._suspend_signals:
             return
-        self._push_now(SetBoldCommand(bold=checked))
+        self._push_now(SetBoldCommand(self._document, bold=checked))
 
     def _on_italic_toggled(self, checked: bool) -> None:
         if self._suspend_signals:
             return
-        self._push_now(SetItalicCommand(italic=checked))
+        self._push_now(SetItalicCommand(self._document, italic=checked))
 
     def _on_underline_toggled(self, checked: bool) -> None:
         if self._suspend_signals:
             return
-        self._push_now(SetUnderlineCommand(underline=checked))
+        self._push_now(SetUnderlineCommand(self._document, underline=checked))
 
     def _on_strike_toggled(self, checked: bool) -> None:
         if self._suspend_signals:
             return
-        self._push_now(SetStrikeCommand(strike=checked))
+        self._push_now(SetStrikeCommand(self._document, strike=checked))
 
     def _on_paragraph_style_changed(self, name: str) -> None:
         if self._suspend_signals or not name:
             return
-        self._schedule(SetParagraphStyleCommand(style_name=name))
+        self._schedule(SetParagraphStyleCommand(self._document, style_name=name))
 
     def _on_opentype_toggled(self, tag: str, enabled: bool) -> None:
         if self._suspend_signals:
             return
-        self._push_now(SetOpenTypeFeatureCommand(feature=tag, enabled=enabled))
+        self._push_now(
+            SetOpenTypeFeatureCommand(self._document, feature=tag, enabled=enabled)
+        )
 
     # ------------------------------------------------------------------ slots — columns
 
@@ -575,19 +595,21 @@ class MeasurementsPalette(QWidget):
         f = self._selected_frame()
         if f is None:
             return
-        self._schedule(SetColumnsCommand(frame_id=f.id, columns=value))
+        self._schedule(SetColumnsCommand(self._document, frame_id=f.id, columns=value))
 
     def _on_gutter_changed(self, value: float) -> None:
         f = self._selected_frame()
         if f is None:
             return
-        self._schedule(SetGutterCommand(frame_id=f.id, gutter=value))
+        self._schedule(SetGutterCommand(self._document, frame_id=f.id, gutter=value))
 
     def _on_baseline_grid_toggled(self, checked: bool) -> None:
         f = self._selected_frame()
         if f is None:
             return
-        self._push_now(SetBaselineGridCommand(frame_id=f.id, enabled=checked))
+        self._push_now(
+            SetBaselineGridCommand(self._document, frame_id=f.id, enabled=checked)
+        )
 
     def _on_vertical_align_changed(self, mode: str) -> None:
         if not mode:
@@ -595,11 +617,13 @@ class MeasurementsPalette(QWidget):
         f = self._selected_frame()
         if f is None:
             return
-        self._schedule(SetVerticalAlignCommand(frame_id=f.id, vertical_align=mode))
+        self._schedule(
+            SetVerticalAlignCommand(self._document, frame_id=f.id, vertical_align=mode)
+        )
 
     # ------------------------------------------------------------------ debounce
 
-    def _schedule(self, command: Any) -> None:
+    def _schedule(self, command: Command) -> None:
         """Coalesce a stream of edits into a single push after `DEBOUNCE_MS`."""
         self._pending_command = command
         self._debounce.start()
@@ -610,7 +634,7 @@ class MeasurementsPalette(QWidget):
         if cmd is not None:
             self._document.undo_stack.push(cmd)
 
-    def _push_now(self, command: Any) -> None:
+    def _push_now(self, command: Command) -> None:
         self._document.undo_stack.push(command)
 
     # ------------------------------------------------------------------ helpers
