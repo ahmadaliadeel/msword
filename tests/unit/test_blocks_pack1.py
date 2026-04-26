@@ -6,29 +6,26 @@ contract, and BlockRegistry registration.
 
 from __future__ import annotations
 
-from msword.model.block import (
-    Block,
-    BlockRegistry,
-    ParagraphBlock,
-    ParagraphSpec,
-)
+from msword.model.block import Block, BlockRegistry, ParagraphSpec
 from msword.model.blocks import (
     CalloutBlock,
     CodeBlock,
     ListBlock,
     ListItem,
+    ParagraphBlock,
     QuoteBlock,
 )
 from msword.model.run import Run
 
 
 def _roundtrip(block: Block) -> Block:
-    return BlockRegistry.from_dict(block.to_dict())
+    return BlockRegistry.resolve(block.to_dict())
 
 
 def test_all_block_kinds_registered() -> None:
+    registered = set(BlockRegistry.kinds())
     for kind in ("list", "quote", "code", "callout", "paragraph"):
-        BlockRegistry.get(kind)
+        assert kind in registered
 
 
 # ---------- ListBlock ----------

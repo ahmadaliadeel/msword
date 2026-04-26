@@ -32,7 +32,7 @@ class ListItem:
     def from_dict(cls, data: dict[str, Any]) -> ListItem:
         return cls(
             id=data["id"],
-            blocks=[BlockRegistry.from_dict(b) for b in data.get("blocks", [])],
+            blocks=[BlockRegistry.resolve(b) for b in data.get("blocks", [])],
             checked=data.get("checked"),
         )
 
@@ -59,7 +59,7 @@ class ListBlock(Block):
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> ListBlock:
+    def _from_dict_specific(cls, data: dict[str, Any]) -> ListBlock:
         return cls(
             id=data["id"],
             list_kind=data.get("list_kind", "bullet"),

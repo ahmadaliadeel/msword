@@ -31,6 +31,7 @@ class CodeBlock(Block):
             yield ParagraphSpec(
                 runs=(Run(text=line, font_ref=CODE_FONT_REF),),
                 paragraph_style_ref=CODE_PARAGRAPH_STYLE,
+                block_id=self.id,
             )
 
     def to_dict(self) -> dict[str, Any]:
@@ -44,7 +45,7 @@ class CodeBlock(Block):
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> CodeBlock:
+    def _from_dict_specific(cls, data: dict[str, Any]) -> CodeBlock:
         return cls(
             id=data["id"],
             language=data.get("language", ""),

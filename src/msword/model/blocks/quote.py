@@ -26,7 +26,7 @@ class QuoteBlock(Block):
                 yield ParagraphSpec(
                     runs=spec.runs,
                     paragraph_style_ref=QUOTE_PARAGRAPH_STYLE,
-                    attrs=spec.attrs,
+                    block_id=spec.block_id,
                 )
 
     def to_dict(self) -> dict[str, Any]:
@@ -37,10 +37,10 @@ class QuoteBlock(Block):
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> QuoteBlock:
+    def _from_dict_specific(cls, data: dict[str, Any]) -> QuoteBlock:
         return cls(
             id=data["id"],
-            blocks=[BlockRegistry.from_dict(b) for b in data.get("blocks", [])],
+            blocks=[BlockRegistry.resolve(b) for b in data.get("blocks", [])],
         )
 
 

@@ -34,11 +34,11 @@ class CalloutBlock(Block):
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> CalloutBlock:
+    def _from_dict_specific(cls, data: dict[str, Any]) -> CalloutBlock:
         return cls(
             id=data["id"],
             callout_kind=data.get("callout_kind", "info"),
-            blocks=[BlockRegistry.from_dict(b) for b in data.get("blocks", [])],
+            blocks=[BlockRegistry.resolve(b) for b in data.get("blocks", [])],
         )
 
 
