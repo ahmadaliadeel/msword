@@ -245,3 +245,46 @@ class EditCharacterStyleCommand(_UnitTwentyFiveStub):
 @_dataclass
 class ApplyCharacterStyleCommand(_UnitTwentyFiveStub):
     style_name: str = ""
+
+
+# Unit-26 colors-palette commands.
+@_dataclass
+class _UnitTwentySixStub:
+    pass
+
+
+@_dataclass
+class AddColorSwatchCommand(_UnitTwentySixStub):
+    name: str = ""
+    profile: str = "sRGB"
+    components: tuple[float, ...] = ()
+    is_spot: bool = False
+
+
+@_dataclass
+class EditColorSwatchCommand(_UnitTwentySixStub):
+    original_name: str = ""
+    new_name: str = ""
+
+
+@_dataclass
+class DeleteColorSwatchCommand(_UnitTwentySixStub):
+    name: str = ""
+
+
+@_dataclass
+class DuplicateColorSwatchCommand(_UnitTwentySixStub):
+    source_name: str = ""
+    new_name: str = ""
+
+
+@_dataclass
+class SetFrameFillCommand(_UnitTwentySixStub):
+    frame_id: str = ""
+    swatch_name: str = ""
+
+
+@_dataclass
+class SetFrameStrokeCommand(_UnitTwentySixStub):
+    frame_id: str = ""
+    swatch_name: str = ""
