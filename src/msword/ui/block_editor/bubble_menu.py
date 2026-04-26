@@ -1,4 +1,3 @@
-# mypy: disable-error-code="assignment"
 """Selection-bubble formatting toolbar.
 
 Floats above the selection rectangle when the user has a non-empty selection

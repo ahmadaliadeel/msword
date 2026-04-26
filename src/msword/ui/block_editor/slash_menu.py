@@ -1,4 +1,3 @@
-# mypy: disable-error-code="assignment"
 """Slash-command popup for the block editor.
 
 Triggered when the user types ``/`` at the start of (or anywhere inside) a
