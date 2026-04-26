@@ -182,6 +182,16 @@ class Document(QObject):
         self.page_reordered.emit(old_index, new_index)
         self.changed.emit()
 
+    # ----- styles ----------------------------------------------------------
+
+    def find_paragraph_style(self, name: str) -> Any:
+        """Return the paragraph style named `name`, or `None` if absent."""
+        return next((s for s in self.paragraph_styles if s.name == name), None)
+
+    def find_character_style(self, name: str) -> Any:
+        """Return the character style named `name`, or `None` if absent."""
+        return next((s for s in self.character_styles if s.name == name), None)
+
     # ----- master pages ----------------------------------------------------
 
     def add_master_page(self, master: MasterPage) -> None:

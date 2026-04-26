@@ -1,4 +1,3 @@
-# mypy: disable-error-code="call-arg, attr-defined, arg-type, assignment, no-any-return, union-attr"
 """Style-editor dialog used by :mod:`msword.ui.palettes.style_sheets`.
 
 Edits a single :class:`ParagraphStyle` (full tab set) or
@@ -11,7 +10,7 @@ the combo) and at command-redo time as a defence in depth.
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import cast
+from typing import Any, cast
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -21,13 +20,11 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
-    QPushButton,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -37,15 +34,17 @@ from msword.commands import (
     EditCharacterStyleCommand,
     EditParagraphStyleCommand,
 )
+from msword.commands.base import Document as CommandDocument
 from msword.model.document import Document
 from msword.model.style import (
     CharacterStyle,
     ParagraphStyle,
+    Style,
     StyleCycleError,
     StyleResolver,
 )
 
-_ALIGNMENTS = ["left", "right", "center", "justify"]
+_ALIGNMENTS = ["left", "right", "center", "justify", "start", "end"]
 _OPENTYPE_FEATURES = [
     "liga",
     "dlig",
@@ -67,7 +66,7 @@ def _opt_spin(value: float | None) -> QDoubleSpinBox:
     spin.setSpecialValueText("—")
     spin.setMinimum(-9999.0)
     if value is None:
-        spin.setValue(spin.minimum())  # shows "—"
+        spin.setValue(spin.minimum())
     else:
         spin.setValue(value)
     return spin
@@ -79,19 +78,32 @@ def _spin_value(spin: QDoubleSpinBox) -> float | None:
     return float(spin.value())
 
 
+def _tri(value: bool | None) -> Qt.CheckState:
+    """Translate Optional[bool] into a Qt.CheckState."""
+    if value is None:
+        return Qt.CheckState.PartiallyChecked
+    return Qt.CheckState.Checked if value else Qt.CheckState.Unchecked
+
+
+def _from_tri(state: Qt.CheckState) -> bool | None:
+    if state == Qt.CheckState.PartiallyChecked:
+        return None
+    return state == Qt.CheckState.Checked
+
+
 class StyleEditorDialog(QDialog):
     """Tabbed editor for paragraph + character styles.
 
     Paragraph styles get the full tab set (Basic / Indents & Spacing /
-    Tabs / Hyphenation / OpenType / Paragraph Rules). Character styles
-    get the Basic tab only.
+    Hyphenation / OpenType). Character styles get the Basic + OpenType
+    tabs only.
     """
 
     def __init__(
         self,
         document: Document,
         *,
-        kind: str,  # "paragraph" | "character"
+        kind: str,
         style: ParagraphStyle | CharacterStyle,
         parent: QWidget | None = None,
     ) -> None:
@@ -110,7 +122,6 @@ class StyleEditorDialog(QDialog):
         self._tabs = QTabWidget(self)
         outer.addWidget(self._tabs)
 
-        # name + based-on header (always visible)
         header = QWidget(self)
         hl = QFormLayout(header)
         self._name_edit = QLineEdit(style.name)
@@ -126,12 +137,8 @@ class StyleEditorDialog(QDialog):
         self._build_basic_tab()
         if kind == "paragraph":
             self._build_indents_tab()
-            self._build_tabs_tab()
             self._build_hyphenation_tab()
-            self._build_opentype_tab(paragraph=True)
-            self._build_paragraph_rules_tab()
-        else:
-            self._build_opentype_tab(paragraph=False)
+        self._build_opentype_tab()
 
         self._buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
@@ -151,12 +158,12 @@ class StyleEditorDialog(QDialog):
         self._font_family.setPlaceholderText("(inherit)")
         form.addRow("Font family:", self._font_family)
 
-        self._font_size = _opt_spin(getattr(self._style, "font_size", None))
+        self._font_size = _opt_spin(getattr(self._style, "font_size_pt", None))
         form.addRow("Font size (pt):", self._font_size)
 
         if self._kind == "paragraph":
             ps = cast(ParagraphStyle, self._style)
-            self._leading = _opt_spin(ps.leading)
+            self._leading = _opt_spin(ps.leading_pt)
             form.addRow("Leading (pt):", self._leading)
             self._alignment = QComboBox()
             self._alignment.addItem("(inherit)", userData=None)
@@ -187,8 +194,8 @@ class StyleEditorDialog(QDialog):
             form.addRow("Strikethrough:", self._strike)
             self._tracking = _opt_spin(cs.tracking)
             form.addRow("Tracking:", self._tracking)
-            self._baseline_shift = _opt_spin(cs.baseline_shift)
-            form.addRow("Baseline shift:", self._baseline_shift)
+            self._baseline_shift = _opt_spin(cs.baseline_shift_pt)
+            form.addRow("Baseline shift (pt):", self._baseline_shift)
 
         self._tabs.addTab(tab, "Basic")
 
@@ -196,53 +203,17 @@ class StyleEditorDialog(QDialog):
         ps = cast(ParagraphStyle, self._style)
         tab = QWidget()
         form = QFormLayout(tab)
-        self._space_before = _opt_spin(ps.space_before)
-        form.addRow("Space before:", self._space_before)
-        self._space_after = _opt_spin(ps.space_after)
-        form.addRow("Space after:", self._space_after)
-        self._first_line_indent = _opt_spin(ps.first_line_indent)
-        form.addRow("First-line indent:", self._first_line_indent)
-        self._left_indent = _opt_spin(ps.left_indent)
-        form.addRow("Left indent:", self._left_indent)
-        self._right_indent = _opt_spin(ps.right_indent)
-        form.addRow("Right indent:", self._right_indent)
+        self._space_before = _opt_spin(ps.space_before_pt)
+        form.addRow("Space before (pt):", self._space_before)
+        self._space_after = _opt_spin(ps.space_after_pt)
+        form.addRow("Space after (pt):", self._space_after)
+        self._first_indent = _opt_spin(ps.first_indent_pt)
+        form.addRow("First-line indent (pt):", self._first_indent)
+        self._left_indent = _opt_spin(ps.left_indent_pt)
+        form.addRow("Left indent (pt):", self._left_indent)
+        self._right_indent = _opt_spin(ps.right_indent_pt)
+        form.addRow("Right indent (pt):", self._right_indent)
         self._tabs.addTab(tab, "Indents & Spacing")
-
-    def _build_tabs_tab(self) -> None:
-        ps = cast(ParagraphStyle, self._style)
-        tab = QWidget()
-        v = QVBoxLayout(tab)
-        v.addWidget(QLabel("Tab stops (position pt, alignment):"))
-        self._tab_list = QListWidget()
-        for pos, align in ps.tabs:
-            self._tab_list.addItem(f"{pos:.2f}\t{align}")
-        v.addWidget(self._tab_list)
-
-        row = QHBoxLayout()
-        self._tab_pos = QDoubleSpinBox()
-        self._tab_pos.setRange(0.0, 9999.0)
-        self._tab_align = QComboBox()
-        self._tab_align.addItems(["left", "right", "center", "decimal"])
-        add = QPushButton("Add")
-        rem = QPushButton("Remove")
-        row.addWidget(self._tab_pos)
-        row.addWidget(self._tab_align)
-        row.addWidget(add)
-        row.addWidget(rem)
-        v.addLayout(row)
-
-        add.clicked.connect(self._on_add_tab)
-        rem.clicked.connect(self._on_remove_tab)
-        self._tabs.addTab(tab, "Tabs")
-
-    def _on_add_tab(self) -> None:
-        pos = self._tab_pos.value()
-        align = self._tab_align.currentText()
-        self._tab_list.addItem(f"{pos:.2f}\t{align}")
-
-    def _on_remove_tab(self) -> None:
-        for item in self._tab_list.selectedItems():
-            self._tab_list.takeItem(self._tab_list.row(item))
 
     def _build_hyphenation_tab(self) -> None:
         ps = cast(ParagraphStyle, self._style)
@@ -252,16 +223,15 @@ class StyleEditorDialog(QDialog):
         self._hyphenate.setTristate(True)
         self._hyphenate.setCheckState(_tri(ps.hyphenate))
         form.addRow("Hyphenate:", self._hyphenate)
-        self._hyphenation_zone = _opt_spin(ps.hyphenation_zone)
-        form.addRow("Hyphenation zone:", self._hyphenation_zone)
         self._tabs.addTab(tab, "Hyphenation")
 
-    def _build_opentype_tab(self, *, paragraph: bool) -> None:
+    def _build_opentype_tab(self) -> None:
         tab = QWidget()
         v = QVBoxLayout(tab)
         v.addWidget(QLabel("OpenType features:"))
         self._opentype_list = QListWidget()
-        active = set(getattr(self._style, "opentype_features", set()) or set())
+        existing = getattr(self._style, "opentype_features", None)
+        active: set[str] = set(existing) if existing else set()
         for feat in _OPENTYPE_FEATURES:
             item = QListWidgetItem(feat)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -272,118 +242,98 @@ class StyleEditorDialog(QDialog):
         v.addWidget(self._opentype_list)
         self._tabs.addTab(tab, "OpenType")
 
-    def _build_paragraph_rules_tab(self) -> None:
-        ps = cast(ParagraphStyle, self._style)
-        tab = QWidget()
-        form = QFormLayout(tab)
-        self._rule_above = _opt_spin(ps.rule_above_thickness)
-        form.addRow("Rule above thickness:", self._rule_above)
-        self._rule_below = _opt_spin(ps.rule_below_thickness)
-        form.addRow("Rule below thickness:", self._rule_below)
-        self._tabs.addTab(tab, "Paragraph Rules")
-
     # ------------------------------------------------------------------
     # based-on combo
     # ------------------------------------------------------------------
     def _populate_based_on(self, style: ParagraphStyle | CharacterStyle) -> None:
-        registry: dict[str, ParagraphStyle] | dict[str, CharacterStyle]
         if self._kind == "paragraph":
-            registry = self._document.paragraph_styles
+            styles: list[Style] = cast(
+                list[Style], self._document.paragraph_styles
+            )
         else:
-            registry = self._document.character_styles
+            styles = cast(list[Style], self._document.character_styles)
 
-        for other_name in sorted(registry):
-            if other_name == style.name:
+        for other in sorted(styles, key=lambda s: s.name):
+            if other.name == style.name:
                 continue
-            # Skip names that would create a cycle if chosen
-            if StyleResolver.detect_cycle(registry, style.name, other_name):
+            if StyleResolver.detect_cycle(styles, style.name, other.name):
                 continue
-            self._based_on.addItem(other_name, userData=other_name)
+            self._based_on.addItem(other.name, userData=other.name)
         if style.based_on is not None:
             idx = self._based_on.findData(style.based_on)
             if idx >= 0:
                 self._based_on.setCurrentIndex(idx)
 
     # ------------------------------------------------------------------
-    # accept → build edited style + dispatch command
+    # accept -> build edited style + dispatch command
     # ------------------------------------------------------------------
-    def _collect_paragraph(self) -> ParagraphStyle:
-        ps = cast(ParagraphStyle, self._style)
-        tabs: list[tuple[float, str]] = []
-        for i in range(self._tab_list.count()):
-            text = self._tab_list.item(i).text()
-            pos_str, _, align = text.partition("\t")
-            try:
-                tabs.append((float(pos_str), align or "left"))
-            except ValueError:
-                continue
-
-        active_features: set[str] = set()
+    def _collect_opentype(self) -> frozenset[str]:
+        active: set[str] = set()
         for i in range(self._opentype_list.count()):
             item = self._opentype_list.item(i)
             if item.checkState() == Qt.CheckState.Checked:
-                active_features.add(item.text())
+                active.add(item.text())
+        return frozenset(active)
 
+    def _collect_paragraph(self) -> ParagraphStyle:
+        ps = cast(ParagraphStyle, self._style)
+        based_on_data = self._based_on.currentData()
+        based_on: str | None = based_on_data if isinstance(based_on_data, str) else None
+        alignment_data = self._alignment.currentData()
+        alignment: Any = alignment_data if isinstance(alignment_data, str) else None
+        features = self._collect_opentype()
         return replace(
             ps,
             name=self._name_edit.text().strip() or ps.name,
-            based_on=self._based_on.currentData(),
+            based_on=based_on,
             font_family=self._font_family.text() or None,
-            font_size=_spin_value(self._font_size),
-            leading=_spin_value(self._leading),
-            alignment=self._alignment.currentData(),
-            space_before=_spin_value(self._space_before),
-            space_after=_spin_value(self._space_after),
-            first_line_indent=_spin_value(self._first_line_indent),
-            left_indent=_spin_value(self._left_indent),
-            right_indent=_spin_value(self._right_indent),
-            tabs=tabs,
+            font_size_pt=_spin_value(self._font_size),
+            leading_pt=_spin_value(self._leading),
+            alignment=alignment,
+            space_before_pt=_spin_value(self._space_before),
+            space_after_pt=_spin_value(self._space_after),
+            first_indent_pt=_spin_value(self._first_indent),
+            left_indent_pt=_spin_value(self._left_indent),
+            right_indent_pt=_spin_value(self._right_indent),
             hyphenate=_from_tri(self._hyphenate.checkState()),
-            hyphenation_zone=_spin_value(self._hyphenation_zone),
-            opentype_features=active_features,
-            rule_above_thickness=_spin_value(self._rule_above),
-            rule_below_thickness=_spin_value(self._rule_below),
+            opentype_features=features if features else None,
         )
 
     def _collect_character(self) -> CharacterStyle:
         cs = cast(CharacterStyle, self._style)
-        active_features: set[str] = set()
-        for i in range(self._opentype_list.count()):
-            item = self._opentype_list.item(i)
-            if item.checkState() == Qt.CheckState.Checked:
-                active_features.add(item.text())
-
+        based_on_data = self._based_on.currentData()
+        based_on: str | None = based_on_data if isinstance(based_on_data, str) else None
+        features = self._collect_opentype()
         return replace(
             cs,
             name=self._name_edit.text().strip() or cs.name,
-            based_on=self._based_on.currentData(),
+            based_on=based_on,
             font_family=self._font_family.text() or None,
-            font_size=_spin_value(self._font_size),
+            font_size_pt=_spin_value(self._font_size),
             bold=_from_tri(self._bold.checkState()),
             italic=_from_tri(self._italic.checkState()),
             underline=_from_tri(self._underline.checkState()),
             strike=_from_tri(self._strike.checkState()),
             tracking=_spin_value(self._tracking),
-            baseline_shift=_spin_value(self._baseline_shift),
-            opentype_features=active_features,
+            baseline_shift_pt=_spin_value(self._baseline_shift),
+            opentype_features=features if features else None,
         )
 
     def _on_accept(self) -> None:
-        cmd: EditParagraphStyleCommand | EditCharacterStyleCommand
+        cmd_doc = cast(CommandDocument, self._document)
         try:
             if self._kind == "paragraph":
-                cmd = EditParagraphStyleCommand(
-                    document=self._document,
+                EditParagraphStyleCommand(
+                    document=cmd_doc,
                     name=self._original_name,
                     new_style=self._collect_paragraph(),
-                )
+                ).redo()
             else:
-                cmd = EditCharacterStyleCommand(
-                    document=self._document,
+                EditCharacterStyleCommand(
+                    document=cmd_doc,
                     name=self._original_name,
                     new_style=self._collect_character(),
-                )
-            cmd.redo()
+                ).redo()
         except StyleCycleError as exc:
             QMessageBox.critical(self, "Cycle in style hierarchy", str(exc))
             return
@@ -391,19 +341,3 @@ class StyleEditorDialog(QDialog):
             QMessageBox.critical(self, "Error", str(exc))
             return
         self.accept()
-
-
-# ---- tristate helpers -----------------------------------------------------
-
-
-def _tri(value: bool | None) -> Qt.CheckState:
-    """Translate Optional[bool] into a Qt.CheckState."""
-    if value is None:
-        return Qt.CheckState.PartiallyChecked
-    return Qt.CheckState.Checked if value else Qt.CheckState.Unchecked
-
-
-def _from_tri(state: Qt.CheckState) -> bool | None:
-    if state == Qt.CheckState.PartiallyChecked:
-        return None
-    return state == Qt.CheckState.Checked

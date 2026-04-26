@@ -42,12 +42,34 @@ from msword.commands.frame import (
 from msword.commands.macro import MacroCommand
 from msword.commands.page import AddPageCommand, MovePageCommand, RemovePageCommand
 from msword.commands.stack import UndoStack
+from msword.commands.style import (
+    AddCharacterStyleCommand,
+    AddParagraphStyleCommand,
+    ApplyCharacterStyleCommand,
+    ApplyParagraphStyleCommand,
+    DeleteCharacterStyleCommand,
+    DeleteParagraphStyleCommand,
+    DuplicateCharacterStyleCommand,
+    DuplicateParagraphStyleCommand,
+    EditCharacterStyleCommand,
+    EditParagraphStyleCommand,
+)
 
 __all__ = [
+    "AddCharacterStyleCommand",
     "AddFrameCommand",
     "AddPageCommand",
+    "AddParagraphStyleCommand",
+    "ApplyCharacterStyleCommand",
+    "ApplyParagraphStyleCommand",
     "Command",
+    "DeleteCharacterStyleCommand",
+    "DeleteParagraphStyleCommand",
     "Document",
+    "DuplicateCharacterStyleCommand",
+    "DuplicateParagraphStyleCommand",
+    "EditCharacterStyleCommand",
+    "EditParagraphStyleCommand",
     "Frame",
     "MacroCommand",
     "MoveFrameCommand",
@@ -183,70 +205,6 @@ class SetZoomCommand(_UnitTwentyTwoStub):
 @_dataclass
 class SetViewModeCommand(_UnitTwentyTwoStub):
     view_mode: str = "paged"
-
-
-# ---------------------------------------------------------------------------
-# Unit-25 style-sheets-palette commands.
-# ---------------------------------------------------------------------------
-
-
-@_dataclass
-class _UnitTwentyFiveStub:
-    pass
-
-
-@_dataclass
-class AddParagraphStyleCommand(_UnitTwentyFiveStub):
-    name: str = ""
-
-
-@_dataclass
-class DuplicateParagraphStyleCommand(_UnitTwentyFiveStub):
-    source_name: str = ""
-    new_name: str = ""
-
-
-@_dataclass
-class DeleteParagraphStyleCommand(_UnitTwentyFiveStub):
-    name: str = ""
-
-
-@_dataclass
-class EditParagraphStyleCommand(_UnitTwentyFiveStub):
-    name: str = ""
-    fields: dict = None  # type: ignore
-
-
-@_dataclass
-class ApplyParagraphStyleCommand(_UnitTwentyFiveStub):
-    style_name: str = ""
-
-
-@_dataclass
-class AddCharacterStyleCommand(_UnitTwentyFiveStub):
-    name: str = ""
-
-
-@_dataclass
-class DuplicateCharacterStyleCommand(_UnitTwentyFiveStub):
-    source_name: str = ""
-    new_name: str = ""
-
-
-@_dataclass
-class DeleteCharacterStyleCommand(_UnitTwentyFiveStub):
-    name: str = ""
-
-
-@_dataclass
-class EditCharacterStyleCommand(_UnitTwentyFiveStub):
-    name: str = ""
-    fields: dict = None  # type: ignore
-
-
-@_dataclass
-class ApplyCharacterStyleCommand(_UnitTwentyFiveStub):
-    style_name: str = ""
 
 
 # Unit-26 colors-palette commands.
