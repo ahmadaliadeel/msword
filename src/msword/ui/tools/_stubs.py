@@ -285,7 +285,11 @@ class StubCanvas:
 
     def __init__(self) -> None:
         self.document: Any = Document()
-        page = Page()
+        try:
+            page = Page()
+        except TypeError:
+            import uuid
+            page = Page(id=f"p-{uuid.uuid4().hex[:8]}")
         self.document.pages.append(page)
         self.current_page: Any = page
         self.active_tool: Any = None
@@ -347,7 +351,9 @@ TableFrame: Any = _resolve("msword.model", "TableFrame", _StubTableFrame)
 Story: Any = _resolve("msword.model", "Story", _StubStory)
 
 # Commands: real symbols land in ``msword.commands``; fall back to stubs.
-AddFrameCommand: Any = _resolve("msword.commands", "AddFrameCommand", _StubAddFrameCommand)
+# Force the stub: master's real AddFrameCommand has signature (doc, page_id, frame),
+# incompatible with unit-20/21's (doc, page, rect, kind, **extra) tool calls.
+AddFrameCommand: Any = _StubAddFrameCommand
 LinkFrameCommand: Any = _resolve("msword.commands", "LinkFrameCommand", _StubLinkFrameCommand)
 MergeStoriesCommand: Any = _resolve(
     "msword.commands", "MergeStoriesCommand", _StubMergeStoriesCommand
