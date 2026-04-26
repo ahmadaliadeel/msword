@@ -322,3 +322,18 @@ class SetRunColorCommand(_UnitTwentyNineStub):
     color: str = ""
     role: str = "color"
     name: str = "set-run-color"
+
+
+# Unit-31 find-replace command.
+@_dataclass
+class _UnitThirtyOneStub:
+    pass
+
+
+@_dataclass
+class ReplaceTextInRunCommand(_UnitThirtyOneStub):
+    run: _Any = None
+    char_start: int = 0
+    char_end: int = 0
+    replacement: str = ""
+    text: str = "Replace text"
