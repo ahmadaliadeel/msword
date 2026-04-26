@@ -1,4 +1,3 @@
-# mypy: disable-error-code="call-arg, attr-defined, arg-type, assignment, no-any-return, union-attr"
 """Style sheets palette — work unit #25.
 
 Dockable QuarkXPress-style palette listing paragraph and character
@@ -40,11 +39,12 @@ from msword.commands import (
     DuplicateCharacterStyleCommand,
     DuplicateParagraphStyleCommand,
 )
+from msword.commands.base import Document as CommandDocument
 from msword.model.document import Document
 from msword.model.style import (
     CharacterStyle,
     ParagraphStyle,
-    StyleResolver,
+    Style,
 )
 from msword.ui.palettes._style_editor_dialog import StyleEditorDialog
 
@@ -52,26 +52,42 @@ _PREVIEW_TEXT = "Aa Bb Cc 123"
 _PREVIEW_SIZE = QSize(160, 28)
 
 
-def _resolved_font(
-    styles: dict[str, ParagraphStyle] | dict[str, CharacterStyle],
-    name: str,
-) -> QFont:
+def _resolve_attr(registry: dict[str, Style], name: str, attr: str) -> Any:
+    """Walk the based-on chain returning the first non-None value of `attr`.
+
+    A self-contained traversal avoids tying us to `StyleResolver`'s
+    `TypeVar` constraint (which doesn't accept the heterogeneous union).
+    Cycles short-circuit silently — defence in depth; cycle detection is
+    enforced at edit time by `EditParagraphStyleCommand`.
+    """
+    seen: set[str] = set()
+    current: str | None = name
+    while current is not None and current not in seen:
+        seen.add(current)
+        style = registry.get(current)
+        if style is None:
+            return None
+        value = getattr(style, attr, None)
+        if value is not None:
+            return value
+        current = style.based_on
+    return None
+
+
+def _resolved_font(registry: dict[str, Style], name: str) -> QFont:
     """Resolve a style's typographic properties up the based-on chain
     and produce a :class:`QFont` for the row preview. Falls back to
     sensible defaults so the preview is always readable.
     """
-    family = StyleResolver.resolve(styles, name, "font_family") or "Sans Serif"
-    size = StyleResolver.resolve(styles, name, "font_size") or 12.0
+    family = _resolve_attr(registry, name, "font_family") or "Sans Serif"
+    size = _resolve_attr(registry, name, "font_size_pt") or 12.0
     font = QFont(str(family))
     font.setPointSizeF(float(size))
-    bold = StyleResolver.resolve(styles, name, "bold")
-    italic = StyleResolver.resolve(styles, name, "italic")
-    underline = StyleResolver.resolve(styles, name, "underline")
-    if bold:
+    if _resolve_attr(registry, name, "bold"):
         font.setBold(True)
-    if italic:
+    if _resolve_attr(registry, name, "italic"):
         font.setItalic(True)
-    if underline:
+    if _resolve_attr(registry, name, "underline"):
         font.setUnderline(True)
     return font
 
@@ -90,7 +106,6 @@ def _render_preview(font: QFont, *, size: QSize = _PREVIEW_SIZE) -> QPixmap:
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         painter.setFont(font)
         metrics = QFontMetrics(font)
-        # vertically center on baseline
         baseline = (size.height() + metrics.ascent() - metrics.descent()) // 2
         painter.drawText(2, baseline, _PREVIEW_TEXT)
     finally:
@@ -107,13 +122,16 @@ class StyleSheetsPalette(QDockWidget):
         super().__init__("Style Sheets", parent)
         self.setObjectName(self.OBJECT_NAME)
         self._document = document
+        # Commands take the structural-Protocol Document defined in
+        # commands.base; the model Document satisfies the subset they
+        # actually call (changed signal + style lists + selection).
+        self._cmd_doc = cast(CommandDocument, document)
 
         container = QWidget(self)
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Toolbar — New / Duplicate / Delete / Edit / Apply
         self._toolbar = QToolBar("Style sheet actions", container)
         self._toolbar.setIconSize(QSize(16, 16))
         self._action_new = QAction(QIcon(), "New", self)
@@ -170,34 +188,36 @@ class StyleSheetsPalette(QDockWidget):
     def _current_list(self) -> QListWidget:
         return cast(QListWidget, self._tabs.currentWidget())
 
-    def _registry_for(
-        self, kind: str
-    ) -> Any:  # dict on unit-25's stub Document, list on master — caller treats both
-        return (
-            self._document.paragraph_styles
-            if kind == "paragraph"
-            else self._document.character_styles
-        )
+    def _styles_for(self, kind: str) -> list[Style]:
+        if kind == "paragraph":
+            return cast(list[Style], self._document.paragraph_styles)
+        return cast(list[Style], self._document.character_styles)
+
+    def _has_name(self, kind: str, name: str) -> bool:
+        return any(s.name == name for s in self._styles_for(kind))
+
+    def _find(self, kind: str, name: str) -> Style | None:
+        if kind == "paragraph":
+            return cast(Style | None, self._document.find_paragraph_style(name))
+        return cast(Style | None, self._document.find_character_style(name))
 
     # ------------------------------------------------------------------
     # public refresh
     # ------------------------------------------------------------------
     def refresh(self) -> None:
         """Rebuild both lists from the document's style registries."""
-        self._paragraph_list.clear()
-        for name in sorted(self._document.paragraph_styles):
-            self._paragraph_list.addItem(self._make_item("paragraph", name))
-        self._character_list.clear()
-        for name in sorted(self._document.character_styles):
-            self._character_list.addItem(self._make_item("character", name))
-
-    def _make_item(self, kind: str, name: str) -> QListWidgetItem:
-        registry = self._registry_for(kind)
-        font = _resolved_font(registry, name)
-        pix = _render_preview(font)
-        item = QListWidgetItem(QIcon(pix), name)
-        item.setData(Qt.ItemDataRole.UserRole, name)
-        return item
+        for kind, list_widget in (
+            ("paragraph", self._paragraph_list),
+            ("character", self._character_list),
+        ):
+            styles = self._styles_for(kind)
+            registry: dict[str, Style] = {s.name: s for s in styles}
+            list_widget.clear()
+            for style in sorted(styles, key=lambda s: s.name):
+                pix = _render_preview(_resolved_font(registry, style.name))
+                item = QListWidgetItem(QIcon(pix), style.name)
+                item.setData(Qt.ItemDataRole.UserRole, style.name)
+                list_widget.addItem(item)
 
     # ------------------------------------------------------------------
     # toolbar handlers
@@ -207,16 +227,13 @@ class StyleSheetsPalette(QDockWidget):
         name, ok = QInputDialog.getText(self, "New style", "Style name:")
         if not ok or not name:
             return
-        registry = self._registry_for(kind)
-        if name in registry:
+        if self._has_name(kind, name):
             QMessageBox.warning(self, "Duplicate", f"{name!r} already exists.")
             return
-        cmd: AddParagraphStyleCommand | AddCharacterStyleCommand
         if kind == "paragraph":
-            cmd = AddParagraphStyleCommand(self._document, ParagraphStyle(name=name))
+            AddParagraphStyleCommand(self._cmd_doc, ParagraphStyle(name=name)).redo()
         else:
-            cmd = AddCharacterStyleCommand(self._document, CharacterStyle(name=name))
-        cmd.redo()
+            AddCharacterStyleCommand(self._cmd_doc, CharacterStyle(name=name)).redo()
         self.refresh()
 
     def _on_duplicate(self) -> None:
@@ -232,15 +249,13 @@ class StyleSheetsPalette(QDockWidget):
         )
         if not ok or not new_name:
             return
-        if new_name in self._registry_for(kind):
+        if self._has_name(kind, new_name):
             QMessageBox.warning(self, "Duplicate", f"{new_name!r} already exists.")
             return
-        dup_cmd: DuplicateParagraphStyleCommand | DuplicateCharacterStyleCommand
         if kind == "paragraph":
-            dup_cmd = DuplicateParagraphStyleCommand(self._document, name, new_name)
+            DuplicateParagraphStyleCommand(self._cmd_doc, name, new_name).redo()
         else:
-            dup_cmd = DuplicateCharacterStyleCommand(self._document, name, new_name)
-        dup_cmd.redo()
+            DuplicateCharacterStyleCommand(self._cmd_doc, name, new_name).redo()
         self.refresh()
 
     def _on_delete(self) -> None:
@@ -256,9 +271,9 @@ class StyleSheetsPalette(QDockWidget):
         if confirm != QMessageBox.StandardButton.Yes:
             return
         if kind == "paragraph":
-            DeleteParagraphStyleCommand(self._document, name).redo()
+            DeleteParagraphStyleCommand(self._cmd_doc, name).redo()
         else:
-            DeleteCharacterStyleCommand(self._document, name).redo()
+            DeleteCharacterStyleCommand(self._cmd_doc, name).redo()
         self.refresh()
 
     def _on_edit(self) -> None:
@@ -280,21 +295,22 @@ class StyleSheetsPalette(QDockWidget):
 
     def _apply(self, name: str) -> None:
         if self._current_kind() == "paragraph":
-            ApplyParagraphStyleCommand(self._document, name).redo()
+            ApplyParagraphStyleCommand(self._cmd_doc, name).redo()
         else:
-            ApplyCharacterStyleCommand(self._document, name).redo()
+            ApplyCharacterStyleCommand(self._cmd_doc, name).redo()
 
     # ------------------------------------------------------------------
     # editor wiring
     # ------------------------------------------------------------------
     def _open_editor(self, name: str) -> None:
         kind = self._current_kind()
-        registry = self._registry_for(kind)
-        style = registry[name]
+        style = self._find(kind, name)
+        if style is None:
+            return
         dialog = StyleEditorDialog(
             self._document,
             kind=kind,
-            style=style,
+            style=cast(ParagraphStyle | CharacterStyle, style),
             parent=self,
         )
         dialog.exec()

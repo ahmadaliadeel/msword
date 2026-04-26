@@ -1,8 +1,8 @@
 """Integration tests for unit-25 — `ui-style-sheets-palette`.
 
-Exercise the palette at the public seam: it consumes a stub
-:class:`Document` (paragraph + character style registries) and emits
-mutations exclusively through Commands.
+Exercise the palette at the public seam: it consumes a `Document` whose
+paragraph + character style registries are list-backed (master's shape)
+and emits mutations exclusively through Commands.
 """
 
 from __future__ import annotations
@@ -26,30 +26,21 @@ from msword.model.style import (
 from msword.ui.palettes._style_editor_dialog import StyleEditorDialog
 from msword.ui.palettes.style_sheets import StyleSheetsPalette
 
-pytestmark = pytest.mark.xfail(
-    reason="unit-25 API expectations diverge from master's Document/ParagraphStyle",
-    strict=False,
-)
-
 
 def _build_document() -> Document:
     doc = Document()
-    doc.paragraph_styles["Body"] = ParagraphStyle(
-        name="Body", font_family="Sans Serif", font_size_pt=11.0
+    doc.paragraph_styles.append(
+        ParagraphStyle(name="Body", font_family="Sans Serif", font_size_pt=11.0)
     )
-    doc.paragraph_styles["Heading 1"] = ParagraphStyle(
-        name="Heading 1",
-        based_on="Body",
-        font_size_pt=18.0,
+    doc.paragraph_styles.append(
+        ParagraphStyle(name="Heading 1", based_on="Body", font_size_pt=18.0)
     )
-    doc.character_styles["Emphasis"] = CharacterStyle(
-        name="Emphasis", italic=True
-    )
+    doc.character_styles.append(CharacterStyle(name="Emphasis", italic=True))
     return doc
 
 
 def test_palette_lists_existing_paragraph_styles(qtbot) -> None:  # type: ignore[no-untyped-def]
-    """Two paragraph styles → palette shows them in the Paragraph tab."""
+    """Two paragraph styles -> palette shows them in the Paragraph tab."""
     doc = _build_document()
     palette = StyleSheetsPalette(doc)
     qtbot.addWidget(palette)
@@ -63,21 +54,18 @@ def test_palette_lists_existing_paragraph_styles(qtbot) -> None:  # type: ignore
     assert char_list.count() == 1
     assert char_list.item(0).text() == "Emphasis"
 
-    # mini preview was rendered as an icon
     assert not para_list.item(0).icon().isNull()
 
 
 def test_new_paragraph_style_dispatches_add_command(  # type: ignore[no-untyped-def]
     qtbot, monkeypatch
 ) -> None:
-    """Click + → AddParagraphStyleCommand fires and the registry grows."""
+    """Click + -> AddParagraphStyleCommand fires and the registry grows."""
     doc = _build_document()
     palette = StyleSheetsPalette(doc)
     qtbot.addWidget(palette)
 
-    # Capture the actual command type that gets executed by patching `redo`.
     dispatched: list[type] = []
-
     real_redo = AddParagraphStyleCommand.redo
 
     def spy_redo(self: AddParagraphStyleCommand) -> None:
@@ -86,7 +74,6 @@ def test_new_paragraph_style_dispatches_add_command(  # type: ignore[no-untyped-
 
     monkeypatch.setattr(AddParagraphStyleCommand, "redo", spy_redo)
 
-    # Stub the QInputDialog the toolbar opens.
     from PySide6.QtWidgets import QInputDialog
 
     monkeypatch.setattr(
@@ -99,8 +86,7 @@ def test_new_paragraph_style_dispatches_add_command(  # type: ignore[no-untyped-
     palette._action_new.trigger()
 
     assert dispatched == [AddParagraphStyleCommand]
-    assert "Caption" in doc.paragraph_styles
-    # palette refreshed
+    assert doc.find_paragraph_style("Caption") is not None
     para_list = palette._paragraph_list
     names = {para_list.item(i).text() for i in range(para_list.count())}
     assert "Caption" in names
@@ -109,7 +95,7 @@ def test_new_paragraph_style_dispatches_add_command(  # type: ignore[no-untyped-
 def test_apply_dispatches_apply_paragraph_style_command(  # type: ignore[no-untyped-def]
     qtbot, monkeypatch
 ) -> None:
-    """Selecting "Body" + Apply → ApplyParagraphStyleCommand("Body")."""
+    """Selecting "Body" + Apply -> ApplyParagraphStyleCommand("Body")."""
     doc = _build_document()
     palette = StyleSheetsPalette(doc)
     qtbot.addWidget(palette)
@@ -125,7 +111,6 @@ def test_apply_dispatches_apply_paragraph_style_command(  # type: ignore[no-unty
 
     palette._tabs.setCurrentWidget(palette._paragraph_list)
     para_list = palette._paragraph_list
-    # Find row with "Body"
     for i in range(para_list.count()):
         if para_list.item(i).text() == "Body":
             para_list.setCurrentRow(i)
@@ -140,7 +125,7 @@ def test_apply_dispatches_apply_paragraph_style_command(  # type: ignore[no-unty
 
 
 def test_double_click_applies_paragraph_style(qtbot, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Double-click on a row → Apply command (per spec)."""
+    """Double-click on a row -> Apply command (per spec)."""
     doc = _build_document()
     palette = StyleSheetsPalette(doc)
     qtbot.addWidget(palette)
@@ -170,7 +155,7 @@ def test_double_click_applies_paragraph_style(qtbot, monkeypatch) -> None:  # ty
 def test_edit_dialog_size_change_dispatches_edit_command(  # type: ignore[no-untyped-def]
     qtbot, monkeypatch
 ) -> None:
-    """Open the editor, change the size, accept → EditParagraphStyleCommand."""
+    """Open the editor, change the size, accept -> EditParagraphStyleCommand."""
     doc = _build_document()
 
     captured: list[ParagraphStyle] = []
@@ -182,30 +167,26 @@ def test_edit_dialog_size_change_dispatches_edit_command(  # type: ignore[no-unt
 
     monkeypatch.setattr(EditParagraphStyleCommand, "redo", spy_redo)
 
-    dialog = StyleEditorDialog(
-        doc,
-        kind="paragraph",
-        style=doc.paragraph_styles["Body"],
-    )
+    body = doc.find_paragraph_style("Body")
+    assert body is not None
+    dialog = StyleEditorDialog(doc, kind="paragraph", style=body)
     qtbot.addWidget(dialog)
 
-    # Change font size to 14 pt
     dialog._font_size.setValue(14.0)
     dialog._on_accept()
 
     assert len(captured) == 1
     edited = captured[0]
     assert edited.name == "Body"
-    assert edited.font_size == 14.0
-    # registry updated
-    assert doc.paragraph_styles["Body"].font_size == 14.0
+    assert edited.font_size_pt == 14.0
+    body_after = doc.find_paragraph_style("Body")
+    assert body_after is not None
+    assert body_after.font_size_pt == 14.0
 
 
 def test_cycle_detection_in_based_on_raises(qtbot) -> None:  # type: ignore[no-untyped-def]
     """A based-on chain that loops back must raise StyleCycleError."""
     doc = _build_document()
-    # Body is based-on nothing; Heading 1 is based-on Body. Try to make
-    # Body based-on Heading 1 → cycle.
     new_body = ParagraphStyle(
         name="Body",
         based_on="Heading 1",
@@ -224,40 +205,31 @@ def test_cycle_detection_in_based_on_raises(qtbot) -> None:  # type: ignore[no-u
 def test_cycle_detection_helper_directly() -> None:
     """`StyleResolver.detect_cycle` recognises self-loops + transitive loops."""
     doc = _build_document()
-    # self-reference
     assert StyleResolver.detect_cycle(doc.paragraph_styles, "Body", "Body") is True
-    # transitive: Heading 1 based on Body; making Body based on Heading 1 cycles.
     assert (
         StyleResolver.detect_cycle(doc.paragraph_styles, "Body", "Heading 1") is True
     )
-    # legitimate parent
     assert (
         StyleResolver.detect_cycle(doc.paragraph_styles, "Heading 1", "Body") is False
     )
-    # unknown parent is not a cycle
     assert StyleResolver.detect_cycle(doc.paragraph_styles, "Body", "Nope") is False
 
 
 def test_cycle_detection_in_dialog_blocks_accept(  # type: ignore[no-untyped-def]
     qtbot, monkeypatch
 ) -> None:
-    """If a user somehow lands on a cycling parent, accept must error out
+    """If a user lands on a cycling parent, accept must error out
     instead of corrupting the registry."""
     doc = _build_document()
-    dialog = StyleEditorDialog(
-        doc,
-        kind="paragraph",
-        style=doc.paragraph_styles["Body"],
-    )
+    body = doc.find_paragraph_style("Body")
+    assert body is not None
+    dialog = StyleEditorDialog(doc, kind="paragraph", style=body)
     qtbot.addWidget(dialog)
 
-    # Force the based-on combo to point at a cycling parent. The combo
-    # filters cycling options out, so we add the entry directly.
     dialog._based_on.addItem("Heading 1", userData="Heading 1")
     idx = dialog._based_on.findData("Heading 1")
     dialog._based_on.setCurrentIndex(idx)
 
-    # Patch QMessageBox.critical so the dialog doesn't block on a real popup.
     shown: list[Any] = []
     from PySide6.QtWidgets import QMessageBox
 
@@ -269,6 +241,7 @@ def test_cycle_detection_in_dialog_blocks_accept(  # type: ignore[no-untyped-def
 
     dialog._on_accept()
 
-    # Body unchanged — based_on must still be None
-    assert doc.paragraph_styles["Body"].based_on is None
+    body_after = doc.find_paragraph_style("Body")
+    assert body_after is not None
+    assert body_after.based_on is None
     assert shown, "expected an error popup for the cycle"

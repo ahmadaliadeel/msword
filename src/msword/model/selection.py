@@ -23,6 +23,8 @@ class Selection:
     frames: list[Frame] = field(default_factory=list)
     caret_run: Run | None = None
     caret_frame: TextFrame | None = None
+    paragraph_style: str | None = None
+    character_style: str | None = None
 
     @property
     def is_empty(self) -> bool:

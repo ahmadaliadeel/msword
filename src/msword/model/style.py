@@ -11,7 +11,7 @@ finalizes their concrete shapes.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Generic, Literal, Protocol, TypeVar, runtime_checkable
 
@@ -175,6 +175,35 @@ class StyleResolver(Generic[_S]):
             if value is not None:
                 return value
         return None
+
+    @staticmethod
+    def detect_cycle(
+        styles: Iterable[Style],
+        child_name: str,
+        prospective_parent_name: str,
+    ) -> bool:
+        """Return True if pointing `child_name.based_on` at
+        `prospective_parent_name` would create a cycle.
+
+        Self-references count as a cycle. Unknown parents do not — they
+        terminate the chain harmlessly.
+        """
+        registry: dict[str, Style] = {s.name: s for s in styles}
+        if child_name == prospective_parent_name:
+            return True
+        if prospective_parent_name not in registry:
+            return False
+        seen: set[str] = {child_name}
+        name: str | None = prospective_parent_name
+        while name is not None:
+            if name in seen:
+                return True
+            seen.add(name)
+            parent = registry.get(name)
+            if parent is None:
+                return False
+            name = parent.based_on
+        return False
 
     def _walk(self) -> Iterator[_S]:
         # `seen` is a list (not a set) so the cycle error message reports the
