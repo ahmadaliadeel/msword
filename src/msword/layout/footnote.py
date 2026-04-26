@@ -23,7 +23,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from msword.layout.paragraph_spec import ParagraphSpec
+from msword.layout.paragraph_spec import FootnotedParagraphSpec
+from msword.model.block import ParagraphSpec
 from msword.model.blocks.footnote import FootnoteBlock
 
 # --- Constants for the in-unit layout stub ----------------------------------
@@ -189,14 +190,14 @@ class FootnoteAreaComposer:
 class PageLayoutResult:
     """Outcome of laying one story onto one page."""
 
-    main_paragraphs: list[ParagraphSpec]
+    main_paragraphs: list[FootnotedParagraphSpec]
     footnote_entries: list[FootnoteEntry]
-    overflow_paragraphs: list[ParagraphSpec]
+    overflow_paragraphs: list[FootnotedParagraphSpec]
     overflow_footnotes: list[FootnoteEntry]
 
 
 def compose_page_with_footnotes(
-    paragraphs: list[ParagraphSpec],
+    paragraphs: list[FootnotedParagraphSpec],
     blocks_by_id: dict[str, FootnoteBlock],
     *,
     page_id: str,
@@ -224,7 +225,7 @@ def compose_page_with_footnotes(
     )
 
     main_capacity = int(page_text_height // LINE_HEIGHT)
-    placed: list[ParagraphSpec] = []
+    placed: list[FootnotedParagraphSpec] = []
 
     for i, para in enumerate(paragraphs):
         if i >= main_capacity:

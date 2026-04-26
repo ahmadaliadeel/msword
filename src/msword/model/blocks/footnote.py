@@ -1,4 +1,3 @@
-# mypy: disable-error-code="override, misc, attr-defined, type-abstract"
 """FootnoteBlock — unit-32 (`feat-footnotes`) model.
 
 Per spec §4.2 / §12 row 32:
@@ -18,22 +17,22 @@ paragraphs of explanation).
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
-from msword.layout.paragraph_spec import ParagraphSpec
-from msword.model.block import Block, BlockRegistry
+from msword.model.block import Block, BlockRegistry, ParagraphSpec
 
 
-@dataclass(slots=True)
+@BlockRegistry.register
+@dataclass
 class FootnoteBlock(Block):
     """A footnote: never appears in the main flow; surfaces in a per-page
     footnote area when a ``FootnoteRefMark`` referencing this block's ``id``
     is encountered by the main composer.
     """
 
-    kind = "footnote"
+    kind: ClassVar[str] = "footnote"
 
     id: str = ""
     body_blocks: list[Block] = field(default_factory=list)
@@ -42,9 +41,7 @@ class FootnoteBlock(Block):
     #: order references are encountered in document order.
     marker: str = ""
 
-    # ---- Paragraph iteration seams ----
-
-    def iter_paragraphs(self) -> Iterator[ParagraphSpec]:
+    def iter_paragraphs(self) -> Iterable[ParagraphSpec]:
         """Footnotes contribute *nothing* to the main flow.
 
         Returning an empty iterator is the whole contract here: it keeps
@@ -52,7 +49,7 @@ class FootnoteBlock(Block):
         area be the sole consumer of the body content (via
         ``iter_footnote_paragraphs``).
         """
-        return iter(())
+        return ()
 
     def iter_footnote_paragraphs(self) -> Iterator[ParagraphSpec]:
         """Yield every paragraph that should be rendered in the footnote
@@ -62,24 +59,18 @@ class FootnoteBlock(Block):
         for child in self.body_blocks:
             yield from child.iter_paragraphs()
 
-    # ---- Serialization ----
-
-    def to_json(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "kind": self.kind,
             "id": self.id,
             "marker": self.marker,
-            "body_blocks": [b.to_json() for b in self.body_blocks],
+            "body_blocks": [b.to_dict() for b in self.body_blocks],
         }
 
     @classmethod
-    def from_json(cls, payload: dict[str, Any]) -> FootnoteBlock:
-        body = [BlockRegistry.from_json(b) for b in payload.get("body_blocks", [])]
+    def _from_dict_specific(cls, d: dict[str, Any]) -> FootnoteBlock:
         return cls(
-            id=payload.get("id", ""),
-            body_blocks=body,
-            marker=payload.get("marker", ""),
+            id=d["id"],
+            body_blocks=[BlockRegistry.resolve(b) for b in d.get("body_blocks", [])],
+            marker=d.get("marker", ""),
         )
-
-
-BlockRegistry.register(FootnoteBlock)
