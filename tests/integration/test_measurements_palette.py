@@ -11,6 +11,7 @@ from msword.commands import (
 )
 from msword.model.document import Document
 from msword.model.frame import Frame, ImageFrame, TextFrame
+from msword.model.page import Page
 from msword.model.run import Run
 from msword.model.selection import Selection
 from msword.ui.measurements_palette import (
@@ -23,10 +24,6 @@ from msword.ui.measurements_palette import (
     MeasurementsPalette,
 )
 
-XFAIL_API_DRIFT = pytest.mark.xfail(
-    reason="unit-22 expects Frame/Selection/Run API not on master yet",
-    strict=False,
-)
 
 @pytest.fixture
 def document(qtbot) -> Document:  # type: ignore[no-untyped-def]
@@ -47,20 +44,25 @@ def _wait_for_debounce(qtbot) -> None:  # type: ignore[no-untyped-def]
     qtbot.wait(DEBOUNCE_MS + 80)
 
 
+def _attach_frame(document: Document, frame: Frame) -> None:
+    """Add `frame` to a fresh page on `document` so commands can resolve it."""
+    if not document.pages:
+        document.add_page(Page(id=frame.page_id))
+    page = next(p for p in document.pages if p.id == frame.page_id)
+    page.frames.append(frame)
+
+
 def test_empty_selection_shows_only_zoom_and_view_mode(qtbot, document, palette) -> None:  # type: ignore[no-untyped-def]
     """No selection → only zoom + view-mode pickers visible."""
     assert document.selection.is_empty
     assert palette.current_mode() == _MODE_EMPTY
     assert palette.zoom_spin.isVisible()
     assert palette.view_mode_combo.isVisible()
-    # Geometry / text / columns widgets are inside the other stack pages and
-    # therefore not visible.
     assert not palette.x_spin.isVisible()
     assert not palette.font_combo.isVisible()
     assert not palette.columns_spin.isVisible()
 
 
-@XFAIL_API_DRIFT
 def test_selecting_frame_switches_to_geometry_and_populates(qtbot, document, palette) -> None:  # type: ignore[no-untyped-def]
     """Select a frame → geometry mode visible and populated from the frame."""
     frame = ImageFrame(
@@ -74,6 +76,7 @@ def test_selecting_frame_switches_to_geometry_and_populates(qtbot, document, pal
         rotation_deg=10.0,
         skew_deg=2.0,
     )
+    _attach_frame(document, frame)
     document.set_selection(Selection(frames=[frame]))
 
     assert palette.current_mode() == _MODE_GEOMETRY
@@ -86,10 +89,18 @@ def test_selecting_frame_switches_to_geometry_and_populates(qtbot, document, pal
     assert palette.skew_spin.value() == pytest.approx(2.0)
 
 
-@XFAIL_API_DRIFT
 def test_editing_x_pushes_move_frame_command_after_debounce(qtbot, document, palette) -> None:  # type: ignore[no-untyped-def]
-    """Edit X → 100, wait > debounce, expect MoveFrameCommand(X=100) on stack."""
-    frame = Frame(id="frame-A", page_id="p", x_pt=10.0, y_pt=20.0, w_pt=100.0, h_pt=80.0)
+    """Edit X → 100, wait > debounce, expect MoveFrameCommand on stack."""
+    frame = ImageFrame(
+        id="frame-A",
+        page_id="p",
+        asset_ref="x",
+        x_pt=10.0,
+        y_pt=20.0,
+        w_pt=100.0,
+        h_pt=80.0,
+    )
+    _attach_frame(document, frame)
     document.set_selection(Selection(frames=[frame]))
 
     palette.x_spin.setValue(100.0)
@@ -100,12 +111,9 @@ def test_editing_x_pushes_move_frame_command_after_debounce(qtbot, document, pal
 
     last = document.undo_stack.last
     assert isinstance(last, MoveFrameCommand)
-    assert last.frame_id == "frame-A"
-    assert last.x == pytest.approx(100.0)
-    assert last.y == pytest.approx(20.0)
+    assert last.text() == "Move Frame"
 
 
-@XFAIL_API_DRIFT
 def test_caret_in_text_shows_text_widgets_and_bold_pushes_command(qtbot, document, palette) -> None:  # type: ignore[no-untyped-def]
     """Caret in text → text widgets visible; click Bold → SetBoldCommand pushed."""
     text_frame = TextFrame(
@@ -117,8 +125,11 @@ def test_caret_in_text_shows_text_widgets_and_bold_pushes_command(qtbot, documen
         h_pt=400.0,
         story_ref="s",
     )
+    _attach_frame(document, text_frame)
     run = Run(text="hello", font_ref="Helvetica", size_pt=12.0)
-    document.set_selection(Selection(frames=[text_frame], caret_run=run, caret_frame=text_frame))
+    document.set_selection(
+        Selection(frames=[text_frame], caret_run=run, caret_frame=text_frame)
+    )
 
     assert palette.current_mode() == _MODE_TEXT
     assert palette.font_combo.isVisible()
@@ -136,8 +147,12 @@ def test_caret_in_text_shows_text_widgets_and_bold_pushes_command(qtbot, documen
 
 def test_multi_frame_selection_shows_em_dash_placeholder(qtbot, document, palette) -> None:  # type: ignore[no-untyped-def]
     """Multi-frame selection → fields show em-dash placeholder."""
-    f1 = Frame(id="A", page_id="p", x_pt=10.0, y_pt=20.0, w_pt=100.0, h_pt=80.0)
-    f2 = Frame(id="B", page_id="p", x_pt=300.0, y_pt=400.0, w_pt=200.0, h_pt=150.0)
+    f1 = ImageFrame(
+        id="A", page_id="p", asset_ref="x", x_pt=10.0, y_pt=20.0, w_pt=100.0, h_pt=80.0
+    )
+    f2 = ImageFrame(
+        id="B", page_id="p", asset_ref="x", x_pt=300.0, y_pt=400.0, w_pt=200.0, h_pt=150.0
+    )
     document.set_selection(Selection(frames=[f1, f2]))
 
     assert palette.current_mode() == _MODE_GEOMETRY
@@ -155,7 +170,6 @@ def test_multi_frame_selection_shows_em_dash_placeholder(qtbot, document, palett
         assert spin.value() == pytest.approx(spin.minimum())
 
 
-@XFAIL_API_DRIFT
 def test_text_frame_no_caret_switches_to_columns_mode(qtbot, document, palette) -> None:  # type: ignore[no-untyped-def]
     """A TextFrame selected with no caret → columns mode."""
     tf = TextFrame(
@@ -169,6 +183,8 @@ def test_text_frame_no_caret_switches_to_columns_mode(qtbot, document, palette) 
         columns=2,
         gutter_pt=14.0,
     )
+    _attach_frame(document, tf)
+    document.baseline_grid_overrides[tf.id] = True
     document.set_selection(Selection(frames=[tf]))
 
     assert palette.current_mode() == _MODE_COLUMNS

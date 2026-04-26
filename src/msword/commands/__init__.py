@@ -83,14 +83,14 @@ __all__ = [
 
 
 # ---------------------------------------------------------------------------
-# Unit-22 measurements-palette commands. These are dataclass stubs (no undo
-# wiring) until unit-22 / unit-9 contribute concrete _do/_undo implementations.
-# Kept in __init__.py so callers can `from msword.commands import SetBoldCommand`
-# without depending on a sibling unit landing first.
+# Unit-22 measurements-palette commands. Real Command subclasses that mutate
+# the canonical Frame / Run / Document via `doc.find_frame` and
+# `doc.selection.caret_run`. Kept in __init__.py so callers can
+# `from msword.commands import SetBoldCommand` without depending on a sibling
+# unit landing first.
 # ---------------------------------------------------------------------------
 
 import dataclasses as _dataclasses
-from dataclasses import dataclass as _dataclass
 from typing import Any as _Any
 from typing import cast as _cast
 
@@ -103,117 +103,382 @@ from msword.model.frame import Stroke as _Stroke
 from msword.model.run import Run as _Run
 
 
-@_dataclass
-class _UnitTwentyTwoStub:
-    """Marker base; subclasses are dataclass stubs from unit-22."""
+def _replace_caret_run(doc: _Any, **marks: _Any) -> _Any:
+    """Replace `doc.selection.caret_run` with a copy carrying `**marks`.
+
+    Returns the previous run so the caller can retain it for undo. If there
+    is no caret run, returns `None` and does nothing.
+    """
+    run = getattr(doc.selection, "caret_run", None)
+    if run is None:
+        return None
+    doc.selection.caret_run = _dataclasses.replace(run, **marks)
+    return run
 
 
-@_dataclass
-class RotateFrameCommand(_UnitTwentyTwoStub):
-    frame_id: str = ""
-    rotation: float = 0.0
+def _restore_caret_run(doc: _Any, run: _Any) -> None:
+    if run is not None:
+        doc.selection.caret_run = run
 
 
-@_dataclass
-class SkewFrameCommand(_UnitTwentyTwoStub):
-    frame_id: str = ""
-    skew: float = 0.0
+class RotateFrameCommand(Command):
+    def __init__(self, doc: _Any, *, frame_id: str, rotation: float) -> None:
+        super().__init__(doc, "Rotate Frame")
+        self.frame_id = frame_id
+        self.rotation = rotation
+        self._old: float | None = None
+
+    def _do(self, doc: _Any) -> None:
+        frame = doc.find_frame(self.frame_id)
+        if frame is None:
+            return
+        self._old = frame.rotation_deg
+        frame.rotation_deg = self.rotation
+
+    def _undo(self, doc: _Any) -> None:
+        if self._old is None:
+            return
+        frame = doc.find_frame(self.frame_id)
+        if frame is not None:
+            frame.rotation_deg = self._old
 
 
-@_dataclass
-class SetAspectLockCommand(_UnitTwentyTwoStub):
-    frame_id: str = ""
-    locked: bool = False
+class SkewFrameCommand(Command):
+    def __init__(self, doc: _Any, *, frame_id: str, skew: float) -> None:
+        super().__init__(doc, "Skew Frame")
+        self.frame_id = frame_id
+        self.skew = skew
+        self._old: float | None = None
+
+    def _do(self, doc: _Any) -> None:
+        frame = doc.find_frame(self.frame_id)
+        if frame is None:
+            return
+        self._old = frame.skew_deg
+        frame.skew_deg = self.skew
+
+    def _undo(self, doc: _Any) -> None:
+        if self._old is None:
+            return
+        frame = doc.find_frame(self.frame_id)
+        if frame is not None:
+            frame.skew_deg = self._old
 
 
-@_dataclass
-class SetColumnsCommand(_UnitTwentyTwoStub):
-    frame_id: str = ""
-    columns: int = 1
+class SetAspectLockCommand(Command):
+    """Frame aspect-lock is a UI constraint not in the canonical Frame schema;
+    stored on the Document keyed by frame id."""
+
+    def __init__(self, doc: _Any, *, frame_id: str, locked: bool) -> None:
+        super().__init__(doc, "Lock Aspect Ratio")
+        self.frame_id = frame_id
+        self.locked = locked
+        self._old: bool | None = None
+
+    def _do(self, doc: _Any) -> None:
+        self._old = bool(doc.aspect_locks.get(self.frame_id, False))
+        doc.aspect_locks[self.frame_id] = self.locked
+
+    def _undo(self, doc: _Any) -> None:
+        if self._old is None:
+            return
+        doc.aspect_locks[self.frame_id] = self._old
 
 
-@_dataclass
-class SetGutterCommand(_UnitTwentyTwoStub):
-    frame_id: str = ""
-    gutter: float = 0.0
+class SetColumnsCommand(Command):
+    def __init__(self, doc: _Any, *, frame_id: str, columns: int) -> None:
+        super().__init__(doc, "Set Columns")
+        self.frame_id = frame_id
+        self.columns = columns
+        self._old: int | None = None
+
+    def _do(self, doc: _Any) -> None:
+        frame = doc.find_frame(self.frame_id)
+        if frame is None:
+            return
+        self._old = frame.columns
+        frame.columns = self.columns
+
+    def _undo(self, doc: _Any) -> None:
+        if self._old is None:
+            return
+        frame = doc.find_frame(self.frame_id)
+        if frame is not None:
+            frame.columns = self._old
 
 
-@_dataclass
-class SetVerticalAlignCommand(_UnitTwentyTwoStub):
-    frame_id: str = ""
-    vertical_align: str = "top"
+class SetGutterCommand(Command):
+    def __init__(self, doc: _Any, *, frame_id: str, gutter: float) -> None:
+        super().__init__(doc, "Set Gutter")
+        self.frame_id = frame_id
+        self.gutter = gutter
+        self._old: float | None = None
+
+    def _do(self, doc: _Any) -> None:
+        frame = doc.find_frame(self.frame_id)
+        if frame is None:
+            return
+        self._old = frame.gutter_pt
+        frame.gutter_pt = self.gutter
+
+    def _undo(self, doc: _Any) -> None:
+        if self._old is None:
+            return
+        frame = doc.find_frame(self.frame_id)
+        if frame is not None:
+            frame.gutter_pt = self._old
 
 
-@_dataclass
-class SetBaselineGridCommand(_UnitTwentyTwoStub):
-    frame_id: str = ""
-    enabled: bool = False
+class SetVerticalAlignCommand(Command):
+    def __init__(self, doc: _Any, *, frame_id: str, vertical_align: str) -> None:
+        super().__init__(doc, "Set Vertical Align")
+        self.frame_id = frame_id
+        self.vertical_align = vertical_align
+        self._old: str | None = None
+
+    def _do(self, doc: _Any) -> None:
+        frame = doc.find_frame(self.frame_id)
+        if frame is None:
+            return
+        self._old = frame.vertical_align
+        frame.vertical_align = self.vertical_align
+
+    def _undo(self, doc: _Any) -> None:
+        if self._old is None:
+            return
+        frame = doc.find_frame(self.frame_id)
+        if frame is not None:
+            frame.vertical_align = self._old
 
 
-@_dataclass
-class SetFontCommand(_UnitTwentyTwoStub):
-    family: str = ""
+class SetBaselineGridCommand(Command):
+    """Toggle the per-frame 'align to baseline grid' override on the Document."""
+
+    def __init__(self, doc: _Any, *, frame_id: str, enabled: bool) -> None:
+        super().__init__(doc, "Set Baseline Grid")
+        self.frame_id = frame_id
+        self.enabled = enabled
+        self._old: bool | None = None
+
+    def _do(self, doc: _Any) -> None:
+        self._old = bool(doc.baseline_grid_overrides.get(self.frame_id, False))
+        doc.baseline_grid_overrides[self.frame_id] = self.enabled
+
+    def _undo(self, doc: _Any) -> None:
+        if self._old is None:
+            return
+        doc.baseline_grid_overrides[self.frame_id] = self._old
 
 
-@_dataclass
-class SetSizeCommand(_UnitTwentyTwoStub):
-    size: float = 0.0
+class SetFontCommand(Command):
+    def __init__(self, doc: _Any, *, family: str) -> None:
+        super().__init__(doc, "Set Font")
+        self.family = family
+        self._old: _Any = None
+
+    def _do(self, doc: _Any) -> None:
+        self._old = _replace_caret_run(doc, font_ref=self.family)
+
+    def _undo(self, doc: _Any) -> None:
+        _restore_caret_run(doc, self._old)
 
 
-@_dataclass
-class SetLeadingCommand(_UnitTwentyTwoStub):
-    leading: float = 0.0
+class SetSizeCommand(Command):
+    def __init__(self, doc: _Any, *, size: float) -> None:
+        super().__init__(doc, "Set Size")
+        self.size = size
+        self._old: _Any = None
+
+    def _do(self, doc: _Any) -> None:
+        self._old = _replace_caret_run(doc, size_pt=self.size)
+
+    def _undo(self, doc: _Any) -> None:
+        _restore_caret_run(doc, self._old)
 
 
-@_dataclass
-class SetTrackingCommand(_UnitTwentyTwoStub):
-    tracking: float = 0.0
+class SetLeadingCommand(Command):
+    """Leading is paragraph-style level. With no resolved style, no-op."""
+
+    def __init__(self, doc: _Any, *, leading: float) -> None:
+        super().__init__(doc, "Set Leading")
+        self.leading = leading
+        self._old: tuple[str, float | None] | None = None
+
+    def _do(self, doc: _Any) -> None:
+        if getattr(doc.selection, "caret_run", None) is None:
+            return
+        styles = doc.paragraph_styles
+        if not (isinstance(styles, list) and styles):
+            return
+        style = styles[0]
+        self._old = (style.name, style.leading_pt)
+        style.leading_pt = self.leading
+
+    def _undo(self, doc: _Any) -> None:
+        if self._old is None:
+            return
+        name, prev = self._old
+        style = doc.find_paragraph_style(name)
+        if style is not None:
+            style.leading_pt = prev
 
 
-@_dataclass
-class SetAlignmentCommand(_UnitTwentyTwoStub):
-    alignment: str = "left"
+class SetTrackingCommand(Command):
+    def __init__(self, doc: _Any, *, tracking: float) -> None:
+        super().__init__(doc, "Set Tracking")
+        self.tracking = tracking
+        self._old: _Any = None
+
+    def _do(self, doc: _Any) -> None:
+        self._old = _replace_caret_run(doc, tracking=self.tracking)
+
+    def _undo(self, doc: _Any) -> None:
+        _restore_caret_run(doc, self._old)
 
 
-@_dataclass
-class SetBoldCommand(_UnitTwentyTwoStub):
-    bold: bool = False
+class SetAlignmentCommand(Command):
+    """Alignment is paragraph-style level. With no styles defined, no-op."""
+
+    def __init__(self, doc: _Any, *, alignment: str) -> None:
+        super().__init__(doc, "Set Alignment")
+        self.alignment = alignment
+        self._old: tuple[str, str | None] | None = None
+
+    def _do(self, doc: _Any) -> None:
+        styles = doc.paragraph_styles
+        if not (isinstance(styles, list) and styles):
+            return
+        style = styles[0]
+        self._old = (style.name, style.alignment)
+        style.alignment = self.alignment
+
+    def _undo(self, doc: _Any) -> None:
+        if self._old is None:
+            return
+        name, prev = self._old
+        style = doc.find_paragraph_style(name)
+        if style is not None:
+            style.alignment = prev
 
 
-@_dataclass
-class SetItalicCommand(_UnitTwentyTwoStub):
-    italic: bool = False
+class SetBoldCommand(Command):
+    def __init__(self, doc: _Any, *, bold: bool) -> None:
+        super().__init__(doc, "Set Bold")
+        self.bold = bold
+        self._old: _Any = None
+
+    def _do(self, doc: _Any) -> None:
+        self._old = _replace_caret_run(doc, bold=self.bold)
+
+    def _undo(self, doc: _Any) -> None:
+        _restore_caret_run(doc, self._old)
 
 
-@_dataclass
-class SetUnderlineCommand(_UnitTwentyTwoStub):
-    underline: bool = False
+class SetItalicCommand(Command):
+    def __init__(self, doc: _Any, *, italic: bool) -> None:
+        super().__init__(doc, "Set Italic")
+        self.italic = italic
+        self._old: _Any = None
+
+    def _do(self, doc: _Any) -> None:
+        self._old = _replace_caret_run(doc, italic=self.italic)
+
+    def _undo(self, doc: _Any) -> None:
+        _restore_caret_run(doc, self._old)
 
 
-@_dataclass
-class SetStrikeCommand(_UnitTwentyTwoStub):
-    strike: bool = False
+class SetUnderlineCommand(Command):
+    def __init__(self, doc: _Any, *, underline: bool) -> None:
+        super().__init__(doc, "Set Underline")
+        self.underline = underline
+        self._old: _Any = None
+
+    def _do(self, doc: _Any) -> None:
+        self._old = _replace_caret_run(doc, underline=self.underline)
+
+    def _undo(self, doc: _Any) -> None:
+        _restore_caret_run(doc, self._old)
 
 
-@_dataclass
-class SetParagraphStyleCommand(_UnitTwentyTwoStub):
-    style_name: str = ""
+class SetStrikeCommand(Command):
+    def __init__(self, doc: _Any, *, strike: bool) -> None:
+        super().__init__(doc, "Set Strike")
+        self.strike = strike
+        self._old: _Any = None
+
+    def _do(self, doc: _Any) -> None:
+        self._old = _replace_caret_run(doc, strike=self.strike)
+
+    def _undo(self, doc: _Any) -> None:
+        _restore_caret_run(doc, self._old)
 
 
-@_dataclass
-class SetOpenTypeFeatureCommand(_UnitTwentyTwoStub):
-    tag: str = ""
-    enabled: bool = False
+class SetParagraphStyleCommand(Command):
+    """Set the document's active paragraph style."""
+
+    def __init__(self, doc: _Any, *, style_name: str) -> None:
+        super().__init__(doc, "Set Paragraph Style")
+        self.style_name = style_name
+        self._old: str | None = None
+
+    def _do(self, doc: _Any) -> None:
+        self._old = doc.active_paragraph_style
+        doc.active_paragraph_style = self.style_name
+
+    def _undo(self, doc: _Any) -> None:
+        doc.active_paragraph_style = self._old
 
 
-@_dataclass
-class SetZoomCommand(_UnitTwentyTwoStub):
-    zoom: float = 1.0
+class SetOpenTypeFeatureCommand(Command):
+    def __init__(self, doc: _Any, *, feature: str, enabled: bool) -> None:
+        super().__init__(doc, "Set OpenType Feature")
+        self.feature = feature
+        self.enabled = enabled
+        self._old: _Any = None
+
+    def _do(self, doc: _Any) -> None:
+        run = getattr(doc.selection, "caret_run", None)
+        if run is None:
+            return
+        feats = set(run.opentype_features)
+        if self.enabled:
+            feats.add(self.feature)
+        else:
+            feats.discard(self.feature)
+        self._old = _replace_caret_run(doc, opentype_features=frozenset(feats))
+
+    def _undo(self, doc: _Any) -> None:
+        _restore_caret_run(doc, self._old)
 
 
-@_dataclass
-class SetViewModeCommand(_UnitTwentyTwoStub):
-    view_mode: str = "paged"
+class SetZoomCommand(Command):
+    def __init__(self, doc: _Any, *, zoom: float) -> None:
+        super().__init__(doc, "Set Zoom")
+        self.zoom = zoom
+        self._old: float | None = None
+
+    def _do(self, doc: _Any) -> None:
+        self._old = doc.zoom
+        doc.zoom = self.zoom
+
+    def _undo(self, doc: _Any) -> None:
+        if self._old is not None:
+            doc.zoom = self._old
+
+
+class SetViewModeCommand(Command):
+    def __init__(self, doc: _Any, *, view_mode: str) -> None:
+        super().__init__(doc, "Set View Mode")
+        self.view_mode = view_mode
+        self._old: str | None = None
+
+    def _do(self, doc: _Any) -> None:
+        self._old = doc.view_mode
+        doc.view_mode = self.view_mode
+
+    def _undo(self, doc: _Any) -> None:
+        if self._old is not None:
+            doc.view_mode = self._old
 
 
 # Unit-26 colors-palette commands.

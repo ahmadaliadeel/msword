@@ -97,6 +97,9 @@ class Document(QObject):
         # UI/session state — used by the measurements palette and the canvas.
         self.zoom: float = 1.0
         self.view_mode: str = "paged"
+        self.aspect_locks: dict[str, bool] = {}
+        self.baseline_grid_overrides: dict[str, bool] = {}
+        self.active_paragraph_style: str | None = None
         # Selection: lazy import to avoid a circular dependency in the model
         # package; populated as the user interacts with the canvas.
         from msword.model.selection import Selection as _Selection
@@ -145,6 +148,44 @@ class Document(QObject):
         new_caret = (getattr(selection, "caret_run", None), getattr(selection, "caret_frame", None))
         if prev_caret != new_caret:
             self.caret_changed.emit()
+
+    def find_frame(self, frame_id: str) -> Any:
+        """Return the frame with the given id from any page, or `None`."""
+        for page in self.pages:
+            for frame in page.frames:
+                if getattr(frame, "id", None) == frame_id:
+                    return frame
+        return None
+
+    def add_frame(self, page_id: str, frame: Any) -> None:
+        """Append `frame` to the page identified by `page_id`."""
+        page = self._page_by_id(page_id)
+        page.frames.append(frame)
+        self.changed.emit()
+
+    def remove_frame(self, page_id: str, frame_id: str) -> Any:
+        """Remove and return the frame `frame_id` from `page_id`."""
+        page = self._page_by_id(page_id)
+        for i, frame in enumerate(page.frames):
+            if getattr(frame, "id", None) == frame_id:
+                removed = page.frames.pop(i)
+                self.changed.emit()
+                return removed
+        raise KeyError(f"frame {frame_id!r} not found on page {page_id!r}")
+
+    def get_frame(self, page_id: str, frame_id: str) -> Any:
+        """Return the frame `frame_id` from page `page_id`."""
+        page = self._page_by_id(page_id)
+        for frame in page.frames:
+            if getattr(frame, "id", None) == frame_id:
+                return frame
+        raise KeyError(f"frame {frame_id!r} not found on page {page_id!r}")
+
+    def _page_by_id(self, page_id: str) -> Page:
+        for page in self.pages:
+            if page.id == page_id:
+                return page
+        raise KeyError(f"page {page_id!r} not found")
 
     # ----- pages -----------------------------------------------------------
 
