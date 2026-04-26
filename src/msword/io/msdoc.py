@@ -523,6 +523,14 @@ def write_msdoc(document: DocumentLike, path: str | os.PathLike[str]) -> None:
     it onto ``path`` only after the ZIP is fully closed and fsynced. A
     crash mid-write leaves the original file (if any) untouched.
     """
+    # Lazy import: ``msword.model.document`` pulls in PySide6/Qt; keeping
+    # the import here lets the InMemoryDocument path stay headless.
+    from msword.model.document import Document as _MasterDocument
+
+    if isinstance(document, _MasterDocument):
+        _write_msdoc_master(document, path)
+        return
+
     target = Path(path)
     target_dir = target.parent
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -590,13 +598,17 @@ def write_msdoc(document: DocumentLike, path: str | os.PathLike[str]) -> None:
         raise
 
 
-def read_msdoc(path: str | os.PathLike[str]) -> InMemoryDocument:
+def read_msdoc(path: str | os.PathLike[str]) -> Any:
     """Read a ``.msdoc`` archive at ``path``.
 
     Validates ``format_version`` (raises :class:`UnsupportedFormatError`)
     and ``blocks_schema_version`` (raises
     :class:`BlocksSchemaMismatchError`) *before* parsing the heavier
     document/story payloads.
+
+    Returns the master ``Document`` model when the archive was written
+    from one (detected via the ``schema_kind`` marker on
+    ``document.json``); otherwise an :class:`InMemoryDocument`.
     """
     src = Path(path)
     if not src.is_file():
@@ -630,6 +642,9 @@ def read_msdoc(path: str | os.PathLike[str]) -> InMemoryDocument:
 
         if not isinstance(document_json, dict):
             raise ManifestError("document.json must be a JSON object")
+
+        if document_json.get("schema_kind") == _MASTER_SCHEMA_KIND:
+            return _read_msdoc_master(zf, names, document_json)
 
         stories_json: dict[str, dict[str, Any]] = {}
         for sid in document_json.get("story_ids", []):
@@ -666,3 +681,134 @@ def read_msdoc(path: str | os.PathLike[str]) -> InMemoryDocument:
             profile_blobs[pid] = zf.read(pp)
 
     return deserialize_document(document_json, stories_json, asset_blobs, profile_blobs)
+
+
+# --- Master Document path ---------------------------------------------------
+#
+# The original :class:`InMemoryDocument` path predates :mod:`msword.model.document`
+# and uses a structurally different schema. Documents authored against the
+# real model carry a ``schema_kind`` marker on ``document.json`` so the reader
+# round-trips them back to the master shape rather than the in-memory mock.
+
+_MASTER_SCHEMA_KIND = "msword.model.document.Document"
+
+
+def _write_msdoc_master(document: Any, path: str | os.PathLike[str]) -> None:
+    target = Path(path)
+    target_dir = target.parent
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    tmp = target_dir / f"{target.name}.tmp-{os.getpid()}"
+
+    document_payload = document.to_dict()
+    # Stories live in their own ZIP entries; replace the embedded copy with a
+    # list of references so a roundtrip can rehydrate them in order.
+    story_dicts = [s.to_dict() for s in document.stories]
+    document_payload["stories"] = [{"id": s["id"]} for s in story_dicts]
+    document_payload["schema_kind"] = _MASTER_SCHEMA_KIND
+
+    locale = str(document.meta.locale or "en")
+
+    entries: list[str] = ["document.json"]
+    for s in story_dicts:
+        entries.append(f"stories/{s['id']}.json")
+    asset_entries: list[tuple[str, bytes]] = []
+    for asset in document.assets:
+        ext = _master_asset_ext(asset.mime_type, asset.original_filename)
+        archive_path = _asset_path_for(kind=asset.kind, sha256=asset.sha256, ext=ext)
+        asset_entries.append((archive_path, asset.data))
+        entries.append(archive_path)
+
+    manifest = build_manifest(
+        format_version=MSDOC_FORMAT_VERSION,
+        blocks_schema_version=BLOCKS_SCHEMA_VERSION,
+        locale=locale,
+        entries=entries,
+    )
+
+    try:
+        with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("manifest.json", _dump_json(manifest))
+            zf.writestr("document.json", _dump_json(document_payload))
+            for s in story_dicts:
+                zf.writestr(f"stories/{s['id']}.json", _dump_json(s))
+            seen_paths: set[str] = set()
+            for archive_path, blob in asset_entries:
+                if archive_path in seen_paths:
+                    continue
+                seen_paths.add(archive_path)
+                zf.writestr(archive_path, blob)
+        with open(tmp, "rb") as fp:
+            os.fsync(fp.fileno())
+        os.replace(tmp, target)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            tmp.unlink()
+        raise
+
+
+def _read_msdoc_master(
+    zf: zipfile.ZipFile, names: set[str], document_json: dict[str, Any]
+) -> Any:
+    from msword.model.block import BlockRegistry
+    from msword.model.document import Document as _MasterDocument
+    from msword.model.story import Story
+
+    story_dicts: list[dict[str, Any]] = []
+    for ref in document_json.get("stories", []):
+        sid = str(ref["id"])
+        story_path = f"stories/{sid}.json"
+        if story_path not in names:
+            raise ManifestError(f"archive missing story file: {story_path}")
+        try:
+            story_obj = json.loads(zf.read(story_path).decode("utf-8"))
+        except json.JSONDecodeError as e:
+            raise ManifestError(f"{story_path} is not valid JSON: {e}") from e
+        if not isinstance(story_obj, dict):
+            raise ManifestError(f"{story_path} must be a JSON object")
+        story_dicts.append(story_obj)
+
+    payload = dict(document_json)
+    payload.pop("schema_kind", None)
+    # Replace the slim story refs with the full dicts so ``Document.from_dict``
+    # restores per-story metadata (language, default styles, blocks).
+    payload["stories"] = []
+    doc = _MasterDocument.from_dict(payload)
+    for sd in story_dicts:
+        # ``Story.from_dict`` is typed against the unit-5 ``BlockProto``; the
+        # real ``BlockRegistry`` returns concrete ``Block`` subclasses that
+        # satisfy the protocol structurally.
+        block_factory: Any = BlockRegistry.resolve
+        story = Story.from_dict(sd, block_factory=block_factory)
+        doc.stories.append(story)
+
+    for asset_meta in document_json.get("assets", []):
+        sha = str(asset_meta.get("sha256", ""))
+        if not sha:
+            continue
+        ext = _master_asset_ext(
+            str(asset_meta.get("mime_type", "")),
+            str(asset_meta.get("original_filename", "")),
+        )
+        kind = str(asset_meta.get("kind", "image"))
+        archive_path = _asset_path_for(kind=kind, sha256=sha, ext=ext)
+        if archive_path not in names:
+            raise ManifestError(f"archive missing asset file: {archive_path}")
+        data = zf.read(archive_path)
+        doc.assets.add(
+            data=data,
+            kind=kind,  # type: ignore[arg-type]
+            mime_type=str(asset_meta.get("mime_type", "")),
+            original_filename=str(asset_meta.get("original_filename", "")),
+        )
+
+    return doc
+
+
+def _master_asset_ext(mime_type: str, filename: str) -> str:
+    """Best-effort filename extension for an asset; falls back to "bin"."""
+    if "." in filename:
+        return filename.rsplit(".", 1)[-1].lower()
+    if "/" in mime_type:
+        return mime_type.split("/", 1)[1].lower()
+    return "bin"
