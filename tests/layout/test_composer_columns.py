@@ -13,7 +13,7 @@ from msword.layout.composer import (
 )
 
 
-def _filler_paragraph(idx: int) -> "object":
+def _filler_paragraph(idx: int) -> object:
     return make_paragraph(
         ("Lorem ipsum " * 8),
         block_id=f"p{idx}",

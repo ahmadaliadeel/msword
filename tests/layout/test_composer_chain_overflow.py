@@ -13,7 +13,7 @@ from msword.layout.composer import (
 )
 
 
-def _long_paragraph(idx: int) -> "object":
+def _long_paragraph(idx: int) -> object:
     return make_paragraph(
         ("Word" + str(idx) + " ") * 50,  # ~250+ chars
         block_id=f"p{idx}",
@@ -72,7 +72,7 @@ def test_resume_after_overflow(qtbot) -> None:  # type: ignore[no-untyped-def]
     cleanly into a follow-on chain."""
     _ = qtbot
     small = StubTextFrame(id="s", rect=QRectF(0, 0, 100, 30))
-    big = StubTextFrame(id="b", rect=QRectF(0, 0, 100, 1000))
+    big = StubTextFrame(id="b", rect=QRectF(0, 0, 100, 1500))
     paragraphs = [_long_paragraph(i) for i in range(3)]
     story = StubStory(paragraphs=paragraphs)  # type: ignore[arg-type]
 

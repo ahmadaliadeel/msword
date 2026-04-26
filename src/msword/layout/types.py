@@ -163,8 +163,8 @@ class TextFrame(Protocol):
 __all__ = [
     "Direction",
     "GlyphRun",
-    "LayoutLine",
     "LayoutFrame",
+    "LayoutLine",
     "OverflowResult",
     "ParagraphSpec",
     "ParagraphStyle",
