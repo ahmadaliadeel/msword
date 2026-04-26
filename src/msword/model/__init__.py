@@ -1,26 +1,34 @@
-"""Stub model package for unit-22 (`ui-measurements-palette`).
+"""Pure data model — no Qt widgets, no rendering, no I/O.
 
-Real units (`model-document-core`, `model-frame`, `model-styles`, …) will land
-their authoritative implementations later. The classes here only provide the
-public surface the measurements palette needs to read state and the signals it
-needs to subscribe to.
+`QObject`/`Signal` from `PySide6.QtCore` is allowed strictly for the change
+bus on `Document` and `AssetRegistry` (per unit-2 anchor invariants).
 """
 
 from __future__ import annotations
 
-from msword.model.document import Document
-from msword.model.frame import Frame, ImageFrame, ShapeFrame, TextFrame
-from msword.model.run import Run
-from msword.model.selection import Selection
-from msword.model.style import ParagraphStyle
+from msword.model.asset import Asset, AssetKind, AssetRegistry
+from msword.model.document import Document, DocumentMeta
+from msword.model.master_page import MasterPage
+from msword.model.page import (
+    A4_HEIGHT_PT,
+    A4_WIDTH_PT,
+    Bleeds,
+    FrameLike,
+    Margins,
+    Page,
+)
 
 __all__ = [
+    "A4_HEIGHT_PT",
+    "A4_WIDTH_PT",
+    "Asset",
+    "AssetKind",
+    "AssetRegistry",
+    "Bleeds",
     "Document",
-    "Frame",
-    "ImageFrame",
-    "ParagraphStyle",
-    "Run",
-    "Selection",
-    "ShapeFrame",
-    "TextFrame",
+    "DocumentMeta",
+    "FrameLike",
+    "Margins",
+    "MasterPage",
+    "Page",
 ]

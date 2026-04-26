@@ -1,202 +1,183 @@
-"""Stub commands package for unit-22.
+"""Commands package — single source of truth for document mutation.
 
-Real implementation lives in unit-9 (`commands-and-undo`). The palette pushes
-typed `Command`s onto an `UndoStack`; the stub records them in-memory so tests
-can introspect them.
+Per the spec (§3 architecture), **commands are the only way views and tools
+mutate the `Document`**. This is a project-wide invariant enforced by
+convention: any code path that changes model state must do so by constructing
+a `Command` subclass and pushing it onto the document's `UndoStack`. Views
+and tools observe the document via Qt signals; they never write to it
+directly.
+
+This package is allowed to import Qt (`PySide6.QtGui.QUndoCommand`,
+`PySide6.QtCore.QUndoStack`); model packages are not.
+
+Public surface:
+
+- `Command` — base class wrapping `QUndoCommand`. Subclasses implement
+  `_do` / `_undo` and override `text()`.
+- `UndoStack` — thin wrapper around `QUndoStack` exposing the only API
+  views/tools should call (`push`, `undo`, `redo`, `begin_macro`,
+  `end_macro`, `clear`, plus `index_changed` and `clean_changed` signals).
+- `MacroCommand` — composite command that runs a list of sub-commands
+  forward and reverses them on undo. Useful when `begin_macro` /
+  `end_macro` aren't sufficient (e.g. constructing a single command that
+  itself contains an ordered batch).
+- Concrete commands for pages and frames (see `page` and `frame` modules).
+
+Concrete commands hold a strong reference to the `Document` rather than a
+weak reference. Documents are the long-lived owners of their undo stack
+(commands sit on `doc.undo_stack`); a command can never outlive its
+document, so the strong-ref keeps the type signature simple and avoids the
+ergonomic cost of `weakref.proxy` indirection on the hot path.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-
-class Command:
-    """Base command stub. Real version integrates with `QUndoStack`."""
-
-    def apply(self) -> None:  # pragma: no cover — overridden by subclasses
-        """Apply the mutation to the document."""
-
-    def revert(self) -> None:  # pragma: no cover — overridden by subclasses
-        """Undo the mutation."""
-
-
-@dataclass
-class MoveFrameCommand(Command):
-    """Move a frame to (`x`, `y`) (points)."""
-
-    frame_id: str
-    x: float
-    y: float
-
-
-@dataclass
-class ResizeFrameCommand(Command):
-    """Resize a frame to (`w`, `h`) (points), preserving the top-left corner."""
-
-    frame_id: str
-    w: float
-    h: float
-
-
-@dataclass
-class RotateFrameCommand(Command):
-    frame_id: str
-    rotation: float
-
-
-@dataclass
-class SkewFrameCommand(Command):
-    frame_id: str
-    skew: float
-
-
-@dataclass
-class SetAspectLockCommand(Command):
-    frame_id: str
-    locked: bool
-
-
-@dataclass
-class SetColumnsCommand(Command):
-    frame_id: str
-    columns: int
-
-
-@dataclass
-class SetGutterCommand(Command):
-    frame_id: str
-    gutter: float
-
-
-@dataclass
-class SetVerticalAlignCommand(Command):
-    frame_id: str
-    vertical_align: str  # top | center | bottom | justify
-
-
-@dataclass
-class SetBaselineGridCommand(Command):
-    frame_id: str
-    enabled: bool
-
-
-@dataclass
-class SetFontCommand(Command):
-    family: str
-
-
-@dataclass
-class SetSizeCommand(Command):
-    size: float
-
-
-@dataclass
-class SetLeadingCommand(Command):
-    leading: float
-
-
-@dataclass
-class SetTrackingCommand(Command):
-    tracking: float
-
-
-@dataclass
-class SetAlignmentCommand(Command):
-    alignment: str  # left | center | right | justify
-
-
-@dataclass
-class SetBoldCommand(Command):
-    bold: bool
-
-
-@dataclass
-class SetItalicCommand(Command):
-    italic: bool
-
-
-@dataclass
-class SetUnderlineCommand(Command):
-    underline: bool
-
-
-@dataclass
-class SetStrikeCommand(Command):
-    strike: bool
-
-
-@dataclass
-class SetParagraphStyleCommand(Command):
-    style_name: str
-
-
-@dataclass
-class SetOpenTypeFeatureCommand(Command):
-    """Toggle an OpenType feature tag (e.g. `liga`, `dlig`, `smcp`, `ss01`…)."""
-
-    feature: str
-    enabled: bool
-
-
-@dataclass
-class SetZoomCommand(Command):
-    zoom: float
-
-
-@dataclass
-class SetViewModeCommand(Command):
-    view_mode: str  # paged | flow
-
-
-class UndoStack:
-    """In-memory `QUndoStack` stand-in.
-
-    The real version (unit-9) wraps `QUndoStack`; for the palette tests we only
-    need the FIFO of pushed commands.
-    """
-
-    def __init__(self) -> None:
-        self._commands: list[Command] = []
-
-    def push(self, command: Command) -> None:
-        self._commands.append(command)
-        command.apply()
-
-    @property
-    def commands(self) -> list[Command]:
-        return list(self._commands)
-
-    @property
-    def last(self) -> Command | None:
-        return self._commands[-1] if self._commands else None
-
-    def clear(self) -> None:
-        self._commands.clear()
-
+from msword.commands.base import Command, Document, Frame, Page
+from msword.commands.frame import (
+    AddFrameCommand,
+    MoveFrameCommand,
+    RemoveFrameCommand,
+    ResizeFrameCommand,
+)
+from msword.commands.macro import MacroCommand
+from msword.commands.page import AddPageCommand, MovePageCommand, RemovePageCommand
+from msword.commands.stack import UndoStack
 
 __all__ = [
+    "AddFrameCommand",
+    "AddPageCommand",
     "Command",
+    "Document",
+    "Frame",
+    "MacroCommand",
     "MoveFrameCommand",
+    "MovePageCommand",
+    "Page",
+    "RemoveFrameCommand",
+    "RemovePageCommand",
     "ResizeFrameCommand",
-    "RotateFrameCommand",
-    "SetAlignmentCommand",
-    "SetAspectLockCommand",
-    "SetBaselineGridCommand",
-    "SetBoldCommand",
-    "SetColumnsCommand",
-    "SetFontCommand",
-    "SetGutterCommand",
-    "SetItalicCommand",
-    "SetLeadingCommand",
-    "SetOpenTypeFeatureCommand",
-    "SetParagraphStyleCommand",
-    "SetSizeCommand",
-    "SetStrikeCommand",
-    "SetTrackingCommand",
-    "SetUnderlineCommand",
-    "SetVerticalAlignCommand",
-    "SetViewModeCommand",
-    "SetZoomCommand",
-    "SkewFrameCommand",
     "UndoStack",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Unit-22 measurements-palette commands. These are dataclass stubs (no undo
+# wiring) until unit-22 / unit-9 contribute concrete _do/_undo implementations.
+# Kept in __init__.py so callers can `from msword.commands import SetBoldCommand`
+# without depending on a sibling unit landing first.
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass as _dataclass
+
+
+@_dataclass
+class _UnitTwentyTwoStub:
+    """Marker base; subclasses are dataclass stubs from unit-22."""
+
+
+@_dataclass
+class RotateFrameCommand(_UnitTwentyTwoStub):
+    frame_id: str = ""
+    rotation: float = 0.0
+
+
+@_dataclass
+class SkewFrameCommand(_UnitTwentyTwoStub):
+    frame_id: str = ""
+    skew: float = 0.0
+
+
+@_dataclass
+class SetAspectLockCommand(_UnitTwentyTwoStub):
+    frame_id: str = ""
+    locked: bool = False
+
+
+@_dataclass
+class SetColumnsCommand(_UnitTwentyTwoStub):
+    frame_id: str = ""
+    columns: int = 1
+
+
+@_dataclass
+class SetGutterCommand(_UnitTwentyTwoStub):
+    frame_id: str = ""
+    gutter: float = 0.0
+
+
+@_dataclass
+class SetVerticalAlignCommand(_UnitTwentyTwoStub):
+    frame_id: str = ""
+    vertical_align: str = "top"
+
+
+@_dataclass
+class SetBaselineGridCommand(_UnitTwentyTwoStub):
+    frame_id: str = ""
+    enabled: bool = False
+
+
+@_dataclass
+class SetFontCommand(_UnitTwentyTwoStub):
+    family: str = ""
+
+
+@_dataclass
+class SetSizeCommand(_UnitTwentyTwoStub):
+    size: float = 0.0
+
+
+@_dataclass
+class SetLeadingCommand(_UnitTwentyTwoStub):
+    leading: float = 0.0
+
+
+@_dataclass
+class SetTrackingCommand(_UnitTwentyTwoStub):
+    tracking: float = 0.0
+
+
+@_dataclass
+class SetAlignmentCommand(_UnitTwentyTwoStub):
+    alignment: str = "left"
+
+
+@_dataclass
+class SetBoldCommand(_UnitTwentyTwoStub):
+    bold: bool = False
+
+
+@_dataclass
+class SetItalicCommand(_UnitTwentyTwoStub):
+    italic: bool = False
+
+
+@_dataclass
+class SetUnderlineCommand(_UnitTwentyTwoStub):
+    underline: bool = False
+
+
+@_dataclass
+class SetStrikeCommand(_UnitTwentyTwoStub):
+    strike: bool = False
+
+
+@_dataclass
+class SetParagraphStyleCommand(_UnitTwentyTwoStub):
+    style_name: str = ""
+
+
+@_dataclass
+class SetOpenTypeFeatureCommand(_UnitTwentyTwoStub):
+    tag: str = ""
+    enabled: bool = False
+
+
+@_dataclass
+class SetZoomCommand(_UnitTwentyTwoStub):
+    zoom: float = 1.0
+
+
+@_dataclass
+class SetViewModeCommand(_UnitTwentyTwoStub):
+    view_mode: str = "paged"

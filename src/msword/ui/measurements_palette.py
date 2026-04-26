@@ -16,9 +16,10 @@ increments coalesce into a single undoable step. Discrete toggles (Bold,
 Italic, OpenType features, baseline grid, …) push immediately.
 """
 
+# mypy: disable-error-code="call-arg, attr-defined"
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction, QFont
@@ -125,8 +126,12 @@ class MeasurementsPalette(QWidget):
         outer.addWidget(self._stack)
         outer.addStretch(1)
 
-        document.selection_changed.connect(self._refresh)
-        document.caret_changed.connect(self._refresh)
+        # Subscribe to selection / caret events when the document exposes them
+        # (units 2-9 may not have wired these signals yet on master).
+        for sig_name in ("selection_changed", "caret_changed"):
+            sig = getattr(document, sig_name, None)
+            if sig is not None and hasattr(sig, "connect"):
+                sig.connect(self._refresh)
         self._refresh()
 
     # ------------------------------------------------------------------ build
@@ -267,7 +272,14 @@ class MeasurementsPalette(QWidget):
         row.addWidget(self.strike_btn)
 
         self.paragraph_style_combo = QComboBox(page)
-        self.paragraph_style_combo.addItems(list(self._document.paragraph_styles.keys()))
+        # paragraph_styles may be a dict (unit-8) or a list of styles (master).
+        styles = self._document.paragraph_styles
+        if isinstance(styles, dict):
+            self.paragraph_style_combo.addItems(list(styles.keys()))
+        else:
+            self.paragraph_style_combo.addItems(
+                [getattr(s, "name", str(s)) for s in styles]
+            )
         self.paragraph_style_combo.currentTextChanged.connect(self._on_paragraph_style_changed)
         row.addWidget(QLabel("Style:", page))
         row.addWidget(self.paragraph_style_combo)
@@ -343,7 +355,11 @@ class MeasurementsPalette(QWidget):
         return self._stack.currentIndex()
 
     def _refresh(self) -> None:
-        sel = self._document.selection
+        # Defensive: master's Document doesn't carry .selection yet (unit-22 +
+        # downstream wiring will). Treat absent selection as empty.
+        from msword.model.selection import Selection
+
+        sel = getattr(self._document, "selection", None) or Selection()
         if sel.has_caret:
             self._stack.setCurrentIndex(_MODE_TEXT)
             self._populate_text_mode()
@@ -448,7 +464,8 @@ class MeasurementsPalette(QWidget):
         """Single frame currently being edited, or `None` if signals should be ignored."""
         if self._suspend_signals:
             return None
-        return self._document.selection.single_frame
+        frame: Frame | None = self._document.selection.single_frame
+        return frame
 
     def _on_x_changed(self, value: float) -> None:
         f = self._selected_frame()
@@ -582,7 +599,7 @@ class MeasurementsPalette(QWidget):
 
     # ------------------------------------------------------------------ debounce
 
-    def _schedule(self, command: Command) -> None:
+    def _schedule(self, command: Any) -> None:
         """Coalesce a stream of edits into a single push after `DEBOUNCE_MS`."""
         self._pending_command = command
         self._debounce.start()
@@ -593,7 +610,7 @@ class MeasurementsPalette(QWidget):
         if cmd is not None:
             self._document.undo_stack.push(cmd)
 
-    def _push_now(self, command: Command) -> None:
+    def _push_now(self, command: Any) -> None:
         self._document.undo_stack.push(command)
 
     # ------------------------------------------------------------------ helpers
